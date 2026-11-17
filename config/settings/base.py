@@ -11,6 +11,9 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "accounts",
+    "creators",
+    "campaigns",
 ]
 
 MIDDLEWARE = [
@@ -59,3 +62,10 @@ STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+AUTH_USER_MODEL = "accounts.User"
+
+# Sign-in and sign-out go through the admin until a public login page exists.
+LOGIN_URL = "admin:login"
+LOGIN_REDIRECT_URL = "admin:index"
+LOGOUT_REDIRECT_URL = "admin:login"
