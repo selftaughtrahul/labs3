@@ -1,4 +1,5 @@
 from django.contrib import admin
+from django.utils.html import format_html
 
 from campaigns.admin import CreatorDealInline
 from creators.models import Creator
@@ -10,19 +11,22 @@ from .forms import CreatorAdminForm
 class CreatorAdmin(admin.ModelAdmin):
     form = CreatorAdminForm
     empty_value_display = "—"
-    show_facets = admin.ShowFacets.ALWAYS
+    list_select_related = ("added_by",)
     list_display = (
         "influencer_name",
         "platform",
+        "tier",
         "country",
+        "niche_list",
+        "language",
         "followers_display",
-        "engagement",
-        "rate_card",
+        "email",
+        "profile",
         "is_profile_checked",
         "added_by",
     )
     list_display_links = ("influencer_name",)
-    list_filter = ("platform", "tier", "is_profile_checked", "rate_currency", "country")
+    list_filter = ("platform", "tier", "is_profile_checked", "country")
     search_fields = (
         "influencer_name",
         "email",
@@ -82,6 +86,10 @@ class CreatorAdmin(admin.ModelAdmin):
         ("Record", {"fields": ("id", "updated_at")}),
     )
 
+    class Media:
+        css = {"all": ("creators/filters.css",)}
+        js = ("creators/filters.js",)
+
     def get_changeform_initial_data(self, request):
         initial = super().get_changeform_initial_data(request)
         initial.setdefault("added_by", request.user.pk)
@@ -93,14 +101,15 @@ class CreatorAdmin(admin.ModelAdmin):
             return "—"
         return f"{obj.followers:,}"
 
-    @admin.display(description="Engagement", ordering="engagement_rate")
-    def engagement(self, obj):
-        if obj.engagement_rate is None:
+    @admin.display(description="Niche")
+    def niche_list(self, obj):
+        if not obj.niche:
             return "—"
-        return f"{obj.engagement_rate}%"
+        return ", ".join(obj.niche)
 
-    @admin.display(description="Rate card", ordering="rate_card_price")
-    def rate_card(self, obj):
-        if obj.rate_card_price is None:
-            return "—"
-        return f"{obj.rate_card_price:,.2f} {obj.rate_currency}"
+    @admin.display(description="Profile")
+    def profile(self, obj):
+        return format_html(
+            '<a href="{}" target="_blank" rel="noopener noreferrer">Open</a>',
+            obj.profile_link,
+        )

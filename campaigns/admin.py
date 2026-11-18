@@ -61,8 +61,8 @@ class CreatorDealInline(DealInline):
 class CampaignAdmin(admin.ModelAdmin):
     form = CampaignAdminForm
     empty_value_display = "—"
-    show_facets = admin.ShowFacets.ALWAYS
     save_on_top = True
+    list_select_related = ("campaign_owner",)
     inlines = (CampaignDealInline,)
     list_display = (
         "client_name",
@@ -128,7 +128,8 @@ class CampaignAdmin(admin.ModelAdmin):
     )
 
     class Media:
-        css = {"all": ("campaigns/admin.css",)}
+        css = {"all": ("campaigns/admin.css", "creators/filters.css")}
+        js = ("creators/filters.js",)
 
     def get_queryset(self, request):
         return super().get_queryset(request).annotate(_deal_count=Count("deals"))
@@ -156,27 +157,28 @@ class CampaignAdmin(admin.ModelAdmin):
 class CampaignCreatorAdmin(admin.ModelAdmin):
     form = CampaignCreatorAdminForm
     empty_value_display = "—"
-    show_facets = admin.ShowFacets.ALWAYS
     save_on_top = True
     autocomplete_fields = ("campaign", "creator")
     list_display = (
         "creator",
-        "campaign",
+        "campaign_name",
         "stage_badge",
         "creator_budget",
-        "client_budget",
-        "margin_eur",
-        "client_status",
+        "deliverable_list",
+        "email_outreached",
+        "sent_date",
+        "date_confirmed",
         "assigned_to",
     )
     list_display_links = ("creator",)
-    list_filter = ("stage", "client_status", "campaign")
+    list_filter = ("stage", "campaign", "creator__platform", "assigned_to")
     list_select_related = ("campaign", "creator")
     search_fields = (
         "creator__influencer_name",
         "creator__profile_link",
         "campaign__client_name",
         "assigned_to",
+        "email_outreached",
         "fit_notes",
     )
     date_hierarchy = "date_confirmed"
@@ -234,7 +236,8 @@ class CampaignCreatorAdmin(admin.ModelAdmin):
     )
 
     class Media:
-        css = {"all": ("campaigns/admin.css",)}
+        css = {"all": ("campaigns/admin.css", "creators/filters.css")}
+        js = ("creators/filters.js",)
 
     def get_changeform_initial_data(self, request):
         initial = super().get_changeform_initial_data(request)
@@ -243,14 +246,20 @@ class CampaignCreatorAdmin(admin.ModelAdmin):
         initial.setdefault("added_by", username)
         return initial
 
+    @admin.display(description="Campaign", ordering="campaign__client_name")
+    def campaign_name(self, obj):
+        return obj.campaign.client_name
+
     @admin.display(description="Stage", ordering="stage")
     def stage_badge(self, obj):
         return badge(obj.stage, obj.get_stage_display())
 
+    @admin.display(description="Deliverables")
+    def deliverable_list(self, obj):
+        if not obj.deliverables:
+            return "—"
+        return ", ".join(obj.deliverables)
+
     @admin.display(description="Creator price", ordering="creator_price")
     def creator_budget(self, obj):
         return money(obj.creator_price, obj.creator_currency)
-
-    @admin.display(description="Client price", ordering="client_price")
-    def client_budget(self, obj):
-        return money(obj.client_price, obj.client_currency)
