@@ -21,7 +21,7 @@ class CampaignStatus(models.TextChoices):
 
 class Campaign(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    client_name = models.CharField(max_length=200)
+    client_name = models.CharField(max_length=200, unique=True)
     deadline_to_scout = models.DateField(
         null=True,
         blank=True,
@@ -199,7 +199,7 @@ def apply_budget(obj, prefix):
         setattr(obj, f"{prefix}_price_eur", price)
         return {}
     if not currency:
-        return {f"{prefix}_currency": "Choose USD or EUR when a price is set."}
+        return {f"{prefix}_currency": "Choose a currency when a price is set."}
     if getattr(obj, f"{prefix}_price_eur") is None:
         return {f"{prefix}_price_eur": "Enter the amount in EUR."}
     return {}
@@ -221,7 +221,9 @@ def budget_constraint(prefix):
                 & models.Q(**{price_eur: models.F(price)})
             )
             | (
-                models.Q(**{f"{price}__isnull": False, currency: Currency.USD})
+                models.Q(**{f"{price}__isnull": False})
+                & ~models.Q(**{currency: ""})
+                & ~models.Q(**{currency: Currency.EUR})
                 & models.Q(**{f"{price_eur}__isnull": False})
             )
         ),
@@ -258,6 +260,9 @@ class CampaignCreator(models.Model):
         blank=True,
         verbose_name="outreach owner",
     )
+    email_outreached = models.CharField(max_length=150, blank=True)
+    sent_date = models.DateField(null=True, blank=True)
+    fx_lock_date = models.DateField(null=True, blank=True, verbose_name="FX lock date")
     creator_price = models.DecimalField(
         max_digits=12,
         decimal_places=2,
@@ -267,7 +272,7 @@ class CampaignCreator(models.Model):
         help_text="What we pay the creator. The client never sees this.",
     )
     creator_currency = models.CharField(
-        max_length=3,
+        max_length=8,
         choices=Currency.choices,
         blank=True,
         verbose_name="creator currency",
@@ -290,7 +295,7 @@ class CampaignCreator(models.Model):
         help_text="What the client pays us.",
     )
     client_currency = models.CharField(
-        max_length=3,
+        max_length=8,
         choices=Currency.choices,
         blank=True,
         verbose_name="client currency",
@@ -361,11 +366,9 @@ class CampaignCreator(models.Model):
         self.client_remarks = (self.client_remarks or "").strip()
         self.assigned_to = " ".join((self.assigned_to or "").split())
         self.added_by = " ".join((self.added_by or "").split())
+        self.email_outreached = " ".join((self.email_outreached or "").split())
         self.deliverables = cleaned("deliverables", clean_string_list, self.deliverables)
         errors = {}
-        unknown = [name for name in self.deliverables if name not in Deliverable.values]
-        if unknown:
-            errors["deliverables"] = "Choose a deliverable from the list."
         errors.update(apply_budget(self, "creator"))
         errors.update(apply_budget(self, "client"))
         if errors:

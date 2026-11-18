@@ -7,8 +7,8 @@ from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 
-from creators.choices import Currency, Platform
-from creators.lists import clean_country_code, clean_string_list, cleaned
+from creators.choices import Currency, Platform, Tier
+from creators.lists import clean_country_name, clean_string_list, cleaned
 
 
 class Creator(models.Model):
@@ -27,9 +27,10 @@ class Creator(models.Model):
     country = models.CharField(
         max_length=50,
         blank=True,
-        help_text="50-letter country name, for example Germany.",
+        help_text="Country name, for example Germany.",
     )
-    language = models.CharField(max_length=64, default="English")
+    language = models.CharField(max_length=120, default="English")
+    tier = models.CharField(max_length=16, choices=Tier.choices, blank=True)
     followers = models.PositiveIntegerField(null=True, blank=True)
     email = models.EmailField(blank=True)
     engagement_rate = models.DecimalField(
@@ -56,10 +57,29 @@ class Creator(models.Model):
         verbose_name="rate card",
     )
     rate_currency = models.CharField(
-        max_length=3,
+        max_length=8,
         choices=Currency.choices,
         blank=True,
         verbose_name="currency",
+    )
+    other_contact = models.CharField(max_length=250, blank=True)
+    audience_insights = models.TextField(blank=True)
+    geo = models.CharField(max_length=120, blank=True)
+    female_pct = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(0), MaxValueValidator(100)],
+        verbose_name="female %",
+    )
+    male_pct = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(0), MaxValueValidator(100)],
+        verbose_name="male %",
     )
     is_profile_checked = models.BooleanField(
         default=False,
@@ -95,6 +115,10 @@ class Creator(models.Model):
                 name="creator_platform_known",
             ),
             models.CheckConstraint(
+                condition=models.Q(tier="") | models.Q(tier__in=Tier.values),
+                name="creator_tier_known",
+            ),
+            models.CheckConstraint(
                 condition=(
                     models.Q(rate_card_price__isnull=True, rate_currency="")
                     | models.Q(
@@ -103,7 +127,7 @@ class Creator(models.Model):
                     )
                 ),
                 name="creator_rate_has_currency",
-                violation_error_message="A rate card needs a currency, USD or EUR.",
+                violation_error_message="A rate card needs a currency from the list.",
             ),
         ]
 
@@ -115,11 +139,14 @@ class Creator(models.Model):
         self.profile_link = (self.profile_link or "").strip()
         self.influencer_name = " ".join((self.influencer_name or "").split())
         self.niche = cleaned("niche", clean_string_list, self.niche)
-        self.country = cleaned("country", clean_country_code, self.country)
+        self.country = cleaned("country", clean_country_name, self.country)
         self.language = " ".join((self.language or "").split()) or "English"
+        self.other_contact = " ".join((self.other_contact or "").split())
+        self.audience_insights = (self.audience_insights or "").strip()
+        self.geo = " ".join((self.geo or "").split())
         if self.rate_card_price is None:
             self.rate_currency = ""
         elif not self.rate_currency:
             raise ValidationError(
-                {"rate_currency": "Choose USD or EUR when a rate card is set."}
+                {"rate_currency": "Choose a currency when a rate card is set."}
             )

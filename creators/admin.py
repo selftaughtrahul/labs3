@@ -22,7 +22,7 @@ class CreatorAdmin(admin.ModelAdmin):
         "added_by",
     )
     list_display_links = ("influencer_name",)
-    list_filter = ("platform", "is_profile_checked", "rate_currency", "country")
+    list_filter = ("platform", "tier", "is_profile_checked", "rate_currency", "country")
     search_fields = (
         "influencer_name",
         "email",
@@ -49,9 +49,14 @@ class CreatorAdmin(admin.ModelAdmin):
                     "niche",
                     "country",
                     "language",
+                    "tier",
                     "followers",
                     "engagement_rate",
                     "avg_views",
+                    "geo",
+                    "female_pct",
+                    "male_pct",
+                    "audience_insights",
                 ),
             },
         ),
@@ -65,7 +70,13 @@ class CreatorAdmin(admin.ModelAdmin):
         (
             "Scouting",
             {
-                "fields": ("is_profile_checked", "source", "added_by", "added_at"),
+                "fields": (
+                    "is_profile_checked",
+                    "source",
+                    "other_contact",
+                    "added_by",
+                    "added_at",
+                ),
             },
         ),
         ("Record", {"fields": ("id", "updated_at")}),

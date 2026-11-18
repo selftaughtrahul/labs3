@@ -194,13 +194,16 @@ class CampaignCreatorAdmin(admin.ModelAdmin):
                     "deliverables",
                     "deliverables_notes",
                     "assigned_to",
+                    "email_outreached",
+                    "sent_date",
+                    "fx_lock_date",
                 ),
             },
         ),
         (
             "What we pay",
             {
-                "description": "Hidden from the client. A price in EUR is copied. A price in USD needs an EUR amount.",
+                "description": "Hidden from the client. A price in EUR is copied. Any other currency needs an EUR amount.",
                 "fields": (
                     "creator_price",
                     "creator_currency",

@@ -32,6 +32,12 @@ def cleaned(field_name, cleaner, value):
         raise ValidationError({field_name: exc.messages}) from exc
 
 
+def clean_country_name(value):
+    if not value:
+        return ""
+    return " ".join(str(value).split())
+
+
 def clean_country_code(value):
     if not value:
         return ""
@@ -42,5 +48,5 @@ def clean_country_code(value):
 
 
 def clean_country_codes(value):
-    codes = [clean_country_code(code) for code in clean_string_list(value)]
-    return [code for code in codes if code]
+    names = [clean_country_name(name) for name in clean_string_list(value)]
+    return [name for name in names if name]
