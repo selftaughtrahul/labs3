@@ -26,7 +26,7 @@ class CreatorAdmin(admin.ModelAdmin):
         "added_by",
     )
     list_display_links = ("influencer_name",)
-    list_filter = ("platform", "tier", "is_profile_checked", "country")
+    list_filter = ("platform", "tier", "source", "is_profile_checked", "country")
     search_fields = (
         "influencer_name",
         "email",

@@ -1,11 +1,13 @@
-"""Client briefs, and one deal row for each creator placed on a brief."""
+"""Client briefs, the deal for each creator, the outreach log, and client review links."""
 
+import secrets
 import uuid
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
+from django.utils import timezone
 
 from creators.choices import Currency, Platform
 from creators.lists import clean_country_codes, clean_string_list, cleaned
@@ -377,3 +379,384 @@ class CampaignCreator(models.Model):
             self.margin_eur = None
         else:
             self.margin_eur = self.client_price_eur - self.creator_price_eur
+
+
+class Channel(models.TextChoices):
+    EMAIL = "email", "Email"
+    INSTAGRAM_DM = "instagram_dm", "Instagram DM"
+    TIKTOK_DM = "tiktok_dm", "TikTok DM"
+    YOUTUBE = "youtube", "YouTube"
+    WHATSAPP = "whatsapp", "WhatsApp"
+    OTHER = "other", "Other"
+
+
+class Direction(models.TextChoices):
+    SENT = "sent", "Sent"
+    RECEIVED = "received", "Received"
+
+
+class OutreachStatus(models.TextChoices):
+    """One row, one moment in the conversation. The footer of the design lists these seven."""
+
+    SENT = "sent", "Sent"
+    FOLLOW_UP = "follow_up", "Follow-up"
+    REPLIED = "replied", "Replied"
+    NEGOTIATING = "negotiating", "Negotiating"
+    CONFIRMED = "confirmed", "Confirmed"
+    NOT_INTERESTED = "not_interested", "Not interested"
+    UNRESPONSIVE = "unresponsive", "Unresponsive"
+
+
+class ShareStatus(models.TextChoices):
+    DRAFT = "draft", "Draft"
+    SENT = "sent", "Sent"
+    VIEWED = "viewed", "Viewed"
+    COMPLETED = "completed", "Completed"
+
+
+def prices_have_currency(name, currency, *prices):
+    """A quote is either empty, or it has a price and a currency from the list."""
+    empty = {currency: "", **{f"{price}__isnull": True for price in prices}}
+    priced = models.Q(**{f"{prices[0]}__isnull": False})
+    for price in prices[1:]:
+        priced |= models.Q(**{f"{price}__isnull": False})
+    return models.CheckConstraint(
+        name=name,
+        violation_error_message="A price needs a currency.",
+        condition=models.Q(**empty) | (priced & models.Q(**{f"{currency}__in": Currency.values})),
+    )
+
+
+def new_share_token():
+    return secrets.token_urlsafe(18)
+
+
+class Outreach(models.Model):
+    """One message, quote, or follow-up on a deal. A new price is a new row."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    campaign_creator = models.ForeignKey(
+        CampaignCreator,
+        on_delete=models.PROTECT,
+        related_name="messages",
+        verbose_name="deal",
+    )
+    channel = models.CharField(max_length=32, choices=Channel.choices)
+    direction = models.CharField(
+        max_length=16,
+        choices=Direction.choices,
+        default=Direction.SENT,
+    )
+    outreach_status = models.CharField(
+        max_length=32,
+        choices=OutreachStatus.choices,
+        default=OutreachStatus.SENT,
+        db_index=True,
+        verbose_name="status",
+    )
+    message_summary = models.TextField(
+        blank=True,
+        help_text="What was said. Leave blank when this row is only a price.",
+        verbose_name="summary",
+    )
+    contact_email = models.EmailField(
+        blank=True,
+        help_text="Address used for this message. A DM can leave this empty.",
+        verbose_name="address used",
+    )
+    quoted_price = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(0)],
+        help_text="The creator's ask. The next quote is a new row.",
+        verbose_name="creator's ask",
+    )
+    offered_price = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(0)],
+        help_text="Our counter-offer on this message.",
+        verbose_name="our offer",
+    )
+    currency = models.CharField(max_length=8, choices=Currency.choices, blank=True)
+    next_followup_date = models.DateField(
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text="When to remind the outreach owner. How many follow-ups end the thread is not decided yet.",
+        verbose_name="next follow-up",
+    )
+    sent_by = models.CharField(max_length=150, blank=True, verbose_name="team member")
+    sent_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When this message was sent or received.",
+        verbose_name="when",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "outreach"
+        ordering = ["-sent_at", "-created_at"]
+        verbose_name = "outreach message"
+        verbose_name_plural = "outreach"
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(channel__in=Channel.values),
+                name="outreach_channel_known",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(direction__in=Direction.values),
+                name="outreach_direction_known",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(outreach_status__in=OutreachStatus.values),
+                name="outreach_status_known",
+            ),
+            prices_have_currency("outreach_price_has_currency", "currency", "quoted_price", "offered_price"),
+        ]
+
+    def __str__(self):
+        return f"{self.campaign_creator} · {self.get_outreach_status_display()}"
+
+    def clean(self):
+        super().clean()
+        self.message_summary = (self.message_summary or "").strip()
+        self.contact_email = (self.contact_email or "").strip()
+        self.sent_by = " ".join((self.sent_by or "").split())
+        has_price = self.quoted_price is not None or self.offered_price is not None
+        if not has_price:
+            self.currency = ""
+            return
+        if not self.currency:
+            raise ValidationError({"currency": "Choose a currency when a price is set."})
+
+
+class ClientShare(models.Model):
+    """One review link for a campaign. The token is the secret in that link."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    campaign = models.ForeignKey(
+        Campaign,
+        on_delete=models.PROTECT,
+        related_name="shares",
+    )
+    share_token = models.CharField(
+        max_length=64,
+        unique=True,
+        default=new_share_token,
+        editable=False,
+        verbose_name="link code",
+    )
+    title = models.CharField(
+        max_length=200,
+        help_text="Round name, for example Round 1.",
+        verbose_name="round",
+    )
+    sent_to_email = models.EmailField(
+        blank=True,
+        verbose_name="client contact",
+    )
+    sent_by = models.CharField(max_length=150, blank=True, verbose_name="team member")
+    sent_at = models.DateTimeField(null=True, blank=True, verbose_name="sent")
+    expires_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When the link stops working. How many days it stays open is not decided yet.",
+        verbose_name="expires",
+    )
+    status = models.CharField(
+        max_length=16,
+        choices=ShareStatus.choices,
+        default=ShareStatus.DRAFT,
+        db_index=True,
+    )
+    submitted_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name="client finished",
+    )
+
+    class Meta:
+        db_table = "client_shares"
+        ordering = ["-sent_at", "title"]
+        verbose_name = "client link"
+        verbose_name_plural = "client links"
+        constraints = [
+            models.CheckConstraint(
+                condition=~models.Q(share_token=""),
+                name="share_token_present",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(status__in=ShareStatus.values),
+                name="share_status_known",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(status=ShareStatus.DRAFT) | models.Q(sent_at__isnull=False),
+                name="share_sent_has_time",
+                violation_error_message="A sent link needs the time it was sent.",
+            ),
+            models.CheckConstraint(
+                condition=~models.Q(status=ShareStatus.COMPLETED) | models.Q(submitted_at__isnull=False),
+                name="share_completed_has_time",
+                violation_error_message="A completed link needs the time the client finished.",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(expires_at__isnull=True)
+                    | models.Q(sent_at__isnull=True)
+                    | models.Q(expires_at__gt=models.F("sent_at"))
+                ),
+                name="share_expires_after_sent",
+                violation_error_message="The link has to expire after it is sent.",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.campaign.client_name} · {self.title}"
+
+    def clean(self):
+        super().clean()
+        self.title = " ".join((self.title or "").split())
+        self.sent_to_email = (self.sent_to_email or "").strip()
+        self.sent_by = " ".join((self.sent_by or "").split())
+        if not self.share_token:
+            self.share_token = new_share_token()
+        now = timezone.now()
+        if self.status != ShareStatus.DRAFT and self.sent_at is None:
+            self.sent_at = now
+        if self.status == ShareStatus.COMPLETED and self.submitted_at is None:
+            self.submitted_at = now
+        errors = {}
+        if self.status != ShareStatus.DRAFT and not self.sent_to_email:
+            errors["sent_to_email"] = "Add the client contact before sending the link."
+        if self.expires_at and self.sent_at and self.expires_at <= self.sent_at:
+            errors["expires_at"] = "The link has to expire after it is sent."
+        if errors:
+            raise ValidationError(errors)
+
+
+class ClientShareItem(models.Model):
+    """One creator on a client link. The creator's price and our margin are never stored here."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    client_share = models.ForeignKey(
+        ClientShare,
+        on_delete=models.CASCADE,
+        related_name="items",
+        verbose_name="link",
+    )
+    campaign_creator = models.ForeignKey(
+        CampaignCreator,
+        on_delete=models.PROTECT,
+        related_name="share_items",
+        verbose_name="creator",
+    )
+    client_price = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(0)],
+        help_text="Shown to the client. Copied from the deal when left empty.",
+        verbose_name="price shown",
+    )
+    client_currency = models.CharField(
+        max_length=8,
+        choices=Currency.choices,
+        blank=True,
+        verbose_name="currency",
+    )
+    decision = models.CharField(
+        max_length=16,
+        choices=Decision.choices,
+        default=Decision.PENDING,
+    )
+    client_remarks = models.TextField(blank=True, verbose_name="client comment")
+    decided_at = models.DateTimeField(null=True, blank=True, verbose_name="answered")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "client_share_items"
+        ordering = ["created_at"]
+        verbose_name = "creator on a link"
+        verbose_name_plural = "creators on a link"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["client_share", "campaign_creator"],
+                name="share_item_creator_uniq",
+                violation_error_message="This creator is already on that link.",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(decision__in=Decision.values),
+                name="share_item_decision_known",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(decision=Decision.PENDING, decided_at__isnull=True)
+                    | (
+                        models.Q(decision__in=[Decision.ACCEPTED, Decision.REJECTED])
+                        & models.Q(decided_at__isnull=False)
+                    )
+                ),
+                name="share_item_decision_time",
+                violation_error_message="An answer needs the time it was given. Pending has no time.",
+            ),
+            prices_have_currency(
+                "share_item_price_has_currency",
+                "client_currency",
+                "client_price",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.campaign_creator.creator} · {self.get_decision_display()}"
+
+    def clean(self):
+        super().clean()
+        self.client_remarks = (self.client_remarks or "").strip()
+        if self.campaign_creator_id and self.client_price is None:
+            deal = self.campaign_creator
+            if deal.client_price is not None:
+                self.client_price = deal.client_price
+                self.client_currency = deal.client_currency
+        if self.client_share_id and self.campaign_creator.campaign_id != self.client_share.campaign_id:
+            raise ValidationError(
+                {"campaign_creator": "This creator is not on the campaign for this link."}
+            )
+        if self.decision == Decision.PENDING:
+            self.decided_at = None
+        elif self.decided_at is None:
+            self.decided_at = timezone.now()
+        if self.client_price is None:
+            self.client_currency = ""
+        elif not self.client_currency:
+            raise ValidationError({"client_currency": "Choose a currency when a price is set."})
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        self.copy_answer_to_deal()
+
+    def copy_answer_to_deal(self):
+        """The deal keeps the latest accept or reject, so the pipeline does not read the link."""
+        if self.decision == Decision.PENDING or self.decided_at is None:
+            return
+        newer = (
+            ClientShareItem.objects.filter(
+                campaign_creator_id=self.campaign_creator_id,
+                decided_at__gt=self.decided_at,
+            )
+            .exclude(pk=self.pk)
+            .exists()
+        )
+        if newer:
+            return
+        CampaignCreator.objects.filter(pk=self.campaign_creator_id).update(
+            client_status=self.decision,
+            client_remarks=self.client_remarks,
+        )

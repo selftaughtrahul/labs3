@@ -3,7 +3,7 @@ from django import forms
 from creators.choices import Platform
 from creators.forms import CommaListForm, use_checkboxes
 
-from .models import Campaign, CampaignCreator
+from .models import Campaign, CampaignCreator, ClientShareItem, Outreach
 
 
 class CampaignAdminForm(CommaListForm):
@@ -30,3 +30,17 @@ class CampaignCreatorAdminForm(CommaListForm):
             "deliverables_notes": forms.Textarea(attrs={"rows": 3}),
             "client_remarks": forms.Textarea(attrs={"rows": 3}),
         }
+
+
+class OutreachAdminForm(forms.ModelForm):
+    class Meta:
+        model = Outreach
+        fields = "__all__"
+        widgets = {"message_summary": forms.Textarea(attrs={"rows": 3})}
+
+
+class ClientShareItemAdminForm(forms.ModelForm):
+    class Meta:
+        model = ClientShareItem
+        fields = "__all__"
+        widgets = {"client_remarks": forms.Textarea(attrs={"rows": 2})}

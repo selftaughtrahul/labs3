@@ -19,4 +19,12 @@
 .ccp-status-negotiating { background: #d9f4f0; color: #0c6b60; }
 .ccp-status-confirmed { background: #e5f6e8; color: #1d6b3a; }
 .ccp-status-shared_with_client { background: #ece6fb; color: #5138a8; }
-.ccp-status-not_interested { background: #fde8e8; color: #8a2e2e; }
+.ccp-status-not_interested,
+.ccp-status-rejected { background: #fde8e8; color: #8a2e2e; }
+.ccp-status-sent,
+.ccp-status-follow_up { background: #d7eef2; color: #0a4f5c; }
+.ccp-status-replied { background: #d9f4f0; color: #0c6b60; }
+.ccp-status-viewed { background: #ece6fb; color: #5138a8; }
+.ccp-status-completed,
+.ccp-status-accepted { background: #e5f6e8; color: #1d6b3a; }
+.ccp-status-pending { background: #e7ebf3; color: #1e2e52; }
