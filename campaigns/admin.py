@@ -1,7 +1,6 @@
 from django.contrib import admin
 from django.db.models import Count
 from django.forms.models import BaseInlineFormSet
-from django.utils.html import format_html
 
 from .forms import (
     CampaignAdminForm,
@@ -17,14 +16,6 @@ from .models import (
     ClientShareItem,
     Outreach,
 )
-
-
-def badge(value, label):
-    return format_html(
-        '<span class="ccp-status ccp-status-{}">{}</span>',
-        value,
-        label,
-    )
 
 
 def money(amount, currency):
@@ -217,10 +208,6 @@ class CampaignAdmin(admin.ModelAdmin):
         ("Record", {"fields": ("id", "created_by", "created_at", "updated_at")}),
     )
 
-    class Media:
-        css = {"all": ("campaigns/admin.css", "creators/filters.css")}
-        js = ("creators/filters.js",)
-
     def get_queryset(self, request):
         return super().get_queryset(request).annotate(_deal_count=Count("deals"))
 
@@ -240,7 +227,7 @@ class CampaignAdmin(admin.ModelAdmin):
 
     @admin.display(description="Status", ordering="status")
     def status_badge(self, obj):
-        return badge(obj.status, obj.get_status_display())
+        return obj.get_status_display()
 
 
 @admin.register(CampaignCreator)
@@ -326,10 +313,6 @@ class CampaignCreatorAdmin(admin.ModelAdmin):
 
     inlines = (DeliverableLineInline, OutreachInline)
 
-    class Media:
-        css = {"all": ("campaigns/admin.css", "creators/filters.css")}
-        js = ("creators/filters.js",)
-
     def get_queryset(self, request):
         return super().get_queryset(request).prefetch_related("deliverable_lines")
 
@@ -346,7 +329,7 @@ class CampaignCreatorAdmin(admin.ModelAdmin):
 
     @admin.display(description="Stage", ordering="stage")
     def stage_badge(self, obj):
-        return badge(obj.stage, obj.get_stage_display())
+        return obj.get_stage_display()
 
     @admin.display(description="Deliverables")
     def deliverable_list(self, obj):
@@ -424,10 +407,6 @@ class OutreachAdmin(admin.ModelAdmin):
         ("Record", {"fields": ("id", "created_at")}),
     )
 
-    class Media:
-        css = {"all": ("campaigns/admin.css", "creators/filters.css")}
-        js = ("creators/filters.js",)
-
     def get_changeform_initial_data(self, request):
         initial = super().get_changeform_initial_data(request)
         initial.setdefault("sent_by", request.user.get_username())
@@ -435,7 +414,7 @@ class OutreachAdmin(admin.ModelAdmin):
 
     @admin.display(description="Status", ordering="outreach_status")
     def status_badge(self, obj):
-        return badge(obj.outreach_status, obj.get_outreach_status_display())
+        return obj.get_outreach_status_display()
 
     @admin.display(description="Summary")
     def summary(self, obj):
@@ -504,10 +483,6 @@ class ClientShareAdmin(admin.ModelAdmin):
         ),
     )
 
-    class Media:
-        css = {"all": ("campaigns/admin.css", "creators/filters.css")}
-        js = ("creators/filters.js",)
-
     def get_queryset(self, request):
         return super().get_queryset(request).annotate(_creator_count=Count("items"))
 
@@ -522,4 +497,4 @@ class ClientShareAdmin(admin.ModelAdmin):
 
     @admin.display(description="Status", ordering="status")
     def status_badge(self, obj):
-        return badge(obj.status, obj.get_status_display())
+        return obj.get_status_display()

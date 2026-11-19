@@ -5,6 +5,7 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parents[2]
 
 INSTALLED_APPS = [
+    "jazzmin",
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -69,3 +70,28 @@ AUTH_USER_MODEL = "accounts.User"
 LOGIN_URL = "admin:login"
 LOGIN_REDIRECT_URL = "admin:index"
 LOGOUT_REDIRECT_URL = "admin:login"
+
+JAZZMIN_SETTINGS = {
+    "site_title": "Creator Campaign Platform",
+    "site_header": "Creator Campaign Platform",
+    "site_brand": "Creator Campaign Platform",
+    "welcome_sign": "Creators and campaigns",
+    "copyright": "Creator Campaign Platform",
+    "search_model": ["creators.Creator", "campaigns.Campaign"],
+    "order_with_respect_to": ["creators", "campaigns", "accounts"],
+    "icons": {
+        "accounts.User": "fas fa-user",
+        "creators.Creator": "fas fa-user-tie",
+        "creators.CreatorRate": "fas fa-tags",
+        "creators.Country": "fas fa-globe",
+        "creators.Language": "fas fa-language",
+        "creators.DeliverableType": "fas fa-clipboard-list",
+        "campaigns.Campaign": "fas fa-bullhorn",
+        "campaigns.CampaignCreator": "fas fa-handshake",
+        "campaigns.Outreach": "fas fa-envelope",
+        "campaigns.ClientShare": "fas fa-link",
+        "auth.Group": "fas fa-users",
+    },
+    "default_icon_parents": "fas fa-folder",
+    "default_icon_children": "fas fa-circle",
+}

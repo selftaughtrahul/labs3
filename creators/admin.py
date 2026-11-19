@@ -117,10 +117,6 @@ class CreatorAdmin(admin.ModelAdmin):
         ("Record", {"fields": ("id", "updated_at")}),
     )
 
-    class Media:
-        css = {"all": ("creators/filters.css",)}
-        js = ("creators/filters.js",)
-
     def get_changeform_initial_data(self, request):
         initial = super().get_changeform_initial_data(request)
         initial.setdefault("added_by", request.user.pk)
