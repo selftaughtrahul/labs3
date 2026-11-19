@@ -9,7 +9,14 @@ from .forms import (
     ClientShareItemAdminForm,
     OutreachAdminForm,
 )
-from .models import Campaign, CampaignCreator, ClientShare, ClientShareItem, Outreach
+from .models import (
+    Campaign,
+    CampaignCreator,
+    CampaignCreatorDeliverable,
+    ClientShare,
+    ClientShareItem,
+    Outreach,
+)
 
 
 def badge(value, label):
@@ -61,6 +68,14 @@ class CreatorDealInline(DealInline):
         "margin_eur",
     )
     verbose_name_plural = "campaigns"
+
+
+class DeliverableLineInline(admin.TabularInline):
+    model = CampaignCreatorDeliverable
+    extra = 0
+    autocomplete_fields = ("deliverable_type",)
+    fields = ("deliverable_type", "name")
+    verbose_name_plural = "deliverables"
 
 
 class OutreachInline(admin.TabularInline):
@@ -156,6 +171,7 @@ class CampaignAdmin(admin.ModelAdmin):
         "remarks_brief",
     )
     date_hierarchy = "deadline_to_scout"
+    filter_horizontal = ("country_market",)
     radio_fields = {"status": admin.HORIZONTAL}
     readonly_fields = ("id", "created_by", "created_at", "updated_at")
     fieldsets = (
@@ -267,7 +283,6 @@ class CampaignCreatorAdmin(admin.ModelAdmin):
                     "creator",
                     "stage",
                     "fit_notes",
-                    "deliverables",
                     "deliverables_notes",
                     "assigned_to",
                     "email_outreached",
@@ -309,11 +324,14 @@ class CampaignCreatorAdmin(admin.ModelAdmin):
         ("Record", {"fields": ("added_by", "id", "created_at", "updated_at")}),
     )
 
-    inlines = (OutreachInline,)
+    inlines = (DeliverableLineInline, OutreachInline)
 
     class Media:
         css = {"all": ("campaigns/admin.css", "creators/filters.css")}
         js = ("creators/filters.js",)
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).prefetch_related("deliverable_lines")
 
     def get_changeform_initial_data(self, request):
         initial = super().get_changeform_initial_data(request)
@@ -332,9 +350,10 @@ class CampaignCreatorAdmin(admin.ModelAdmin):
 
     @admin.display(description="Deliverables")
     def deliverable_list(self, obj):
-        if not obj.deliverables:
+        names = [line.name for line in obj.deliverable_lines.all()]
+        if not names:
             return "—"
-        return ", ".join(obj.deliverables)
+        return ", ".join(names)
 
     @admin.display(description="Creator price", ordering="creator_price")
     def creator_budget(self, obj):

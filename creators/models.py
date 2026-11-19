@@ -3,12 +3,47 @@
 import uuid
 
 from django.conf import settings
-from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 
 from creators.choices import Currency, Platform, Tier
-from creators.lists import clean_country_name, clean_string_list, cleaned
+from creators.lists import clean_string_list, cleaned
+
+
+class Country(models.Model):
+    name = models.CharField(max_length=120, unique=True)
+
+    class Meta:
+        db_table = "countries"
+        ordering = ["name"]
+        verbose_name_plural = "countries"
+
+    def __str__(self):
+        return self.name
+
+
+class Language(models.Model):
+    name = models.CharField(max_length=120, unique=True)
+
+    class Meta:
+        db_table = "languages"
+        ordering = ["name"]
+
+    def __str__(self):
+        return self.name
+
+
+class DeliverableType(models.Model):
+    """A post, reel, video, or other unit a creator can be hired for."""
+
+    name = models.CharField(max_length=120, unique=True)
+
+    class Meta:
+        db_table = "deliverable_types"
+        ordering = ["name"]
+
+    def __str__(self):
+        return self.name
 
 
 class Creator(models.Model):
@@ -24,12 +59,20 @@ class Creator(models.Model):
         blank=True,
         help_text="Comma-separated, for example beauty, skincare.",
     )
-    country = models.CharField(
-        max_length=50,
+    country = models.ForeignKey(
+        Country,
+        on_delete=models.PROTECT,
+        null=True,
         blank=True,
-        help_text="Country name, for example Germany.",
+        related_name="creators",
     )
-    language = models.CharField(max_length=120, default="English")
+    language = models.ForeignKey(
+        Language,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="creators",
+    )
     tier = models.CharField(max_length=16, choices=Tier.choices, blank=True)
     followers = models.PositiveIntegerField(null=True, blank=True)
     email = models.EmailField(blank=True)
@@ -46,21 +89,6 @@ class Creator(models.Model):
         null=True,
         blank=True,
         verbose_name="average views",
-    )
-    rate_card_price = models.DecimalField(
-        max_digits=12,
-        decimal_places=2,
-        null=True,
-        blank=True,
-        validators=[MinValueValidator(0)],
-        help_text="Usual rate. The price for a campaign is agreed later, on the deal.",
-        verbose_name="rate card",
-    )
-    rate_currency = models.CharField(
-        max_length=8,
-        choices=Currency.choices,
-        blank=True,
-        verbose_name="currency",
     )
     other_contact = models.CharField(max_length=250, blank=True)
     audience_insights = models.TextField(blank=True)
@@ -118,17 +146,6 @@ class Creator(models.Model):
                 condition=models.Q(tier="") | models.Q(tier__in=Tier.values),
                 name="creator_tier_known",
             ),
-            models.CheckConstraint(
-                condition=(
-                    models.Q(rate_card_price__isnull=True, rate_currency="")
-                    | models.Q(
-                        rate_card_price__isnull=False,
-                        rate_currency__in=Currency.values,
-                    )
-                ),
-                name="creator_rate_has_currency",
-                violation_error_message="A rate card needs a currency from the list.",
-            ),
         ]
 
     def __str__(self):
@@ -139,14 +156,46 @@ class Creator(models.Model):
         self.profile_link = (self.profile_link or "").strip()
         self.influencer_name = " ".join((self.influencer_name or "").split())
         self.niche = cleaned("niche", clean_string_list, self.niche)
-        self.country = cleaned("country", clean_country_name, self.country)
-        self.language = " ".join((self.language or "").split()) or "English"
         self.other_contact = " ".join((self.other_contact or "").split())
         self.audience_insights = (self.audience_insights or "").strip()
         self.geo = " ".join((self.geo or "").split())
-        if self.rate_card_price is None:
-            self.rate_currency = ""
-        elif not self.rate_currency:
-            raise ValidationError(
-                {"rate_currency": "Choose a currency when a rate card is set."}
-            )
+
+
+class CreatorRate(models.Model):
+    """The creator's current price for one deliverable. A campaign stores its own copy."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    creator = models.ForeignKey(
+        Creator,
+        on_delete=models.CASCADE,
+        related_name="rates",
+    )
+    deliverable = models.ForeignKey(
+        DeliverableType,
+        on_delete=models.PROTECT,
+        related_name="rates",
+    )
+    price = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        validators=[MinValueValidator(0)],
+    )
+    currency = models.CharField(max_length=8, choices=Currency.choices)
+
+    class Meta:
+        db_table = "creator_rates"
+        ordering = ["deliverable__name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["creator", "deliverable"],
+                name="creator_rate_deliverable_uniq",
+                violation_error_message="This creator already has a price for that deliverable.",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(currency__in=Currency.values),
+                name="creator_rate_currency_known",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.deliverable} · {self.price} {self.currency}"

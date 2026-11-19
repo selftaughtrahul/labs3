@@ -7,7 +7,7 @@ from .models import Campaign, CampaignCreator, ClientShareItem, Outreach
 
 
 class CampaignAdminForm(CommaListForm):
-    comma_list_fields = ("country_market", "niche_vertical", "sub_niche")
+    comma_list_fields = ("niche_vertical", "sub_niche")
 
     class Meta:
         model = Campaign
@@ -20,7 +20,7 @@ class CampaignAdminForm(CommaListForm):
 
 
 class CampaignCreatorAdminForm(CommaListForm):
-    comma_list_fields = ("deliverables",)
+    comma_list_fields = ()
 
     class Meta:
         model = CampaignCreator

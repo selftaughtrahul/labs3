@@ -21,6 +21,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.core.validators import validate_email
 from django.db import connection, transaction
 
+from campaigns.deliverables import replace_deliverable_lines
 from campaigns.models import (
     Campaign,
     CampaignCreator,
@@ -32,6 +33,7 @@ from campaigns.models import (
     Stage,
 )
 from creators.lists import clean_string_list
+from creators.masters import lookup_named
 from creators.management.commands.import_central_sheet import (
     keep_last,
     normalize_budget,
@@ -40,7 +42,7 @@ from creators.management.commands.import_central_sheet import (
     parse_tier,
     username_from_name,
 )
-from creators.models import Creator
+from creators.models import Country, Creator, Language
 
 DEFAULT_SHEET = Path(r"C:\Users\rahul\Downloads\Influencer_Prospecting_Flow 2026.xlsx")
 SOURCE = "prospecting"
@@ -615,8 +617,8 @@ class Command(BaseCommand):
             profile_link=profile["profile_link"],
             influencer_name=profile["name"],
             niche=profile["niche"],
-            country=profile["country"],
-            language=profile["language"] or "English",
+            country=lookup_named(Country, profile["country"]),
+            language=lookup_named(Language, profile["language"] or "English"),
             followers=profile["followers"],
             tier=profile["tier"],
             email=profile["email"],
@@ -646,8 +648,9 @@ class Command(BaseCommand):
         if profile["name"] and not profile["name"].startswith("http"):
             put("influencer_name", profile["name"])
         put("niche", profile["niche"])
-        put("country", profile["country"])
-        put("language", profile["language"])
+        put("country", lookup_named(Country, profile["country"]))
+        if profile["language"]:
+            put("language", lookup_named(Language, profile["language"]))
         put("followers", profile["followers"])
         put("tier", profile["tier"])
         put("email", profile["email"])
@@ -675,6 +678,7 @@ class Command(BaseCommand):
         }
         to_create = []
         to_update = []
+        line_deals = []
         self._deal_ids = {}
         for (platform, link, campaign_key), row in deals.items():
             campaign = campaigns.get(campaign_key)
@@ -684,10 +688,16 @@ class Command(BaseCommand):
             current = existing.get((campaign.id, creator.id))
             if current is None:
                 deal = self._new_deal(campaign, creator, row)
+                if row["deliverables"]:
+                    deal._sheet_deliverables = row["deliverables"]
+                    line_deals.append(deal)
                 to_create.append(deal)
                 continue
             if self._apply_deal(current, row):
                 to_update.append(current)
+            if row["deliverables"]:
+                current._sheet_deliverables = row["deliverables"]
+                line_deals.append(current)
             self._deal_ids[(platform, link, campaign_key)] = current.id
         created_count = 0
         for start in range(0, len(to_create), 400):
@@ -702,7 +712,6 @@ class Command(BaseCommand):
                 [
                     "stage",
                     "fit_notes",
-                    "deliverables",
                     "deliverables_notes",
                     "assigned_to",
                     "email_outreached",
@@ -716,6 +725,8 @@ class Command(BaseCommand):
                 ],
                 batch_size=400,
             )
+        for deal in line_deals:
+            replace_deliverable_lines(deal, deal._sheet_deliverables)
         return created_count, len(to_update)
 
     def _brief_status_applies(self, current, incoming):
@@ -745,7 +756,6 @@ class Command(BaseCommand):
             creator=creator,
             stage=row["stage"],
             fit_notes=row["comments"],
-            deliverables=row["deliverables"],
             deliverables_notes=row["deliverables_notes"],
             assigned_to=row["who"],
             email_outreached=row["email_outreached"],
@@ -771,7 +781,6 @@ class Command(BaseCommand):
         if self._stage_moves_forward(deal.stage, row["stage"]):
             put("stage", row["stage"])
         put("fit_notes", row["comments"])
-        put("deliverables", row["deliverables"])
         put("deliverables_notes", row["deliverables_notes"])
         put("assigned_to", row["who"])
         put("email_outreached", row["email_outreached"])

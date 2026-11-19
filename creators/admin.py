@@ -2,16 +2,30 @@ from django.contrib import admin
 from django.utils.html import format_html
 
 from campaigns.admin import CreatorDealInline
-from creators.models import Creator
+from creators.models import Country, Creator, CreatorRate, DeliverableType, Language
 
 from .forms import CreatorAdminForm
+
+
+class CreatorRateInline(admin.TabularInline):
+    model = CreatorRate
+    extra = 0
+    autocomplete_fields = ("deliverable",)
+    fields = ("deliverable", "price", "currency")
+    verbose_name_plural = "rate card"
+
+
+@admin.register(Country, Language, DeliverableType)
+class NameAdmin(admin.ModelAdmin):
+    search_fields = ("name",)
+    ordering = ("name",)
 
 
 @admin.register(Creator)
 class CreatorAdmin(admin.ModelAdmin):
     form = CreatorAdminForm
     empty_value_display = "—"
-    list_select_related = ("added_by",)
+    list_select_related = ("added_by", "country", "language")
     list_display = (
         "influencer_name",
         "platform",
@@ -31,12 +45,13 @@ class CreatorAdmin(admin.ModelAdmin):
         "influencer_name",
         "email",
         "profile_link",
-        "country",
+        "country__name",
+        "language__name",
         "added_by__username",
     )
     date_hierarchy = "added_at"
     radio_fields = {"platform": admin.HORIZONTAL}
-    inlines = (CreatorDealInline,)
+    inlines = (CreatorRateInline, CreatorDealInline)
     readonly_fields = ("id", "updated_at")
     fieldsets = (
         (
@@ -62,13 +77,6 @@ class CreatorAdmin(admin.ModelAdmin):
                     "male_pct",
                     "audience_insights",
                 ),
-            },
-        ),
-        (
-            "Rate card",
-            {
-                "description": "Reference rate only. What we pay on a campaign is stored on the deal.",
-                "fields": ("rate_card_price", "rate_currency"),
             },
         ),
         (

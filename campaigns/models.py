@@ -6,11 +6,11 @@ import uuid
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
-from django.db import models
+from django.db import models, transaction
 from django.utils import timezone
 
 from creators.choices import Currency, Platform
-from creators.lists import clean_country_codes, clean_string_list, cleaned
+from creators.lists import clean_string_list, cleaned
 
 
 class CampaignStatus(models.TextChoices):
@@ -30,11 +30,12 @@ class Campaign(models.Model):
         db_index=True,
         verbose_name="scouting deadline",
     )
-    country_market = models.JSONField(
-        default=list,
+    country_market = models.ManyToManyField(
+        "creators.Country",
         blank=True,
-        help_text="Comma-separated country names, for example Germany, United States.",
+        related_name="campaigns",
         verbose_name="markets",
+        help_text="Countries this brief is recruiting in.",
     )
     creators_needed = models.PositiveIntegerField(
         default=10,
@@ -145,7 +146,6 @@ class Campaign(models.Model):
         self.client_name = " ".join((self.client_name or "").split())
         self.content_type = " ".join((self.content_type or "").split())
         self.content_format = " ".join((self.content_format or "").split())
-        self.country_market = cleaned("country_market", clean_country_codes, self.country_market)
         self.niche_vertical = cleaned("niche_vertical", clean_string_list, self.niche_vertical)
         self.sub_niche = cleaned("sub_niche", clean_string_list, self.sub_niche)
         self.platforms = cleaned("platforms", clean_string_list, self.platforms)
@@ -255,7 +255,6 @@ class CampaignCreator(models.Model):
         blank=True,
         help_text="Why this profile fits the brief.",
     )
-    deliverables = models.JSONField(default=list, blank=True)
     deliverables_notes = models.TextField(blank=True)
     assigned_to = models.CharField(
         max_length=150,
@@ -369,7 +368,6 @@ class CampaignCreator(models.Model):
         self.assigned_to = " ".join((self.assigned_to or "").split())
         self.added_by = " ".join((self.added_by or "").split())
         self.email_outreached = " ".join((self.email_outreached or "").split())
-        self.deliverables = cleaned("deliverables", clean_string_list, self.deliverables)
         errors = {}
         errors.update(apply_budget(self, "creator"))
         errors.update(apply_budget(self, "client"))
@@ -379,6 +377,45 @@ class CampaignCreator(models.Model):
             self.margin_eur = None
         else:
             self.margin_eur = self.client_price_eur - self.creator_price_eur
+
+
+class CampaignCreatorDeliverable(models.Model):
+    """The deliverable name as it was when this creator was added to the campaign."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    campaign_creator = models.ForeignKey(
+        CampaignCreator,
+        on_delete=models.CASCADE,
+        related_name="deliverable_lines",
+        verbose_name="deal",
+    )
+    deliverable_type = models.ForeignKey(
+        "creators.DeliverableType",
+        on_delete=models.PROTECT,
+        related_name="deal_lines",
+        verbose_name="deliverable",
+    )
+    name = models.CharField(max_length=120)
+
+    class Meta:
+        db_table = "campaign_creator_deliverables"
+        ordering = ["name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["campaign_creator", "deliverable_type"],
+                name="deal_deliverable_uniq",
+                violation_error_message="This deliverable is already on that creator.",
+            ),
+        ]
+
+    def __str__(self):
+        return self.name
+
+    def clean(self):
+        super().clean()
+        self.name = " ".join((self.name or "").split())
+        if self.deliverable_type_id and not self.name:
+            self.name = self.deliverable_type.name
 
 
 class Channel(models.TextChoices):
@@ -534,6 +571,48 @@ class Outreach(models.Model):
             return
         if not self.currency:
             raise ValidationError({"currency": "Choose a currency when a price is set."})
+
+    def save(self, *args, **kwargs):
+        previous_status = None
+        if self.pk:
+            previous_status = (
+                Outreach.objects.filter(pk=self.pk)
+                .values_list("outreach_status", flat=True)
+                .first()
+            )
+        with transaction.atomic():
+            super().save(*args, **kwargs)
+            self.copy_confirmed_eur_price(previous_status)
+
+    def copy_confirmed_eur_price(self, previous_status):
+        """Copy a newly confirmed EUR quote onto the deal. Later saves leave that price alone."""
+        if previous_status == OutreachStatus.CONFIRMED:
+            return
+        if self.outreach_status != OutreachStatus.CONFIRMED:
+            return
+        if self.currency != Currency.EUR:
+            return
+        price = self.offered_price if self.offered_price is not None else self.quoted_price
+        if price is None:
+            return
+        deal = self.campaign_creator
+        deal.creator_price = price
+        deal.creator_currency = Currency.EUR
+        if apply_budget(deal, "creator"):
+            return
+        if deal.creator_price_eur is None or deal.client_price_eur is None:
+            deal.margin_eur = None
+        else:
+            deal.margin_eur = deal.client_price_eur - deal.creator_price_eur
+        deal.save(
+            update_fields=[
+                "creator_price",
+                "creator_currency",
+                "creator_price_eur",
+                "margin_eur",
+                "updated_at",
+            ]
+        )
 
 
 class ClientShare(models.Model):

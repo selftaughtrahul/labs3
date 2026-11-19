@@ -19,10 +19,12 @@ from django.core.management.base import BaseCommand, CommandError
 from django.core.validators import validate_email
 from django.db import transaction
 
+from campaigns.deliverables import replace_deliverable_lines
 from campaigns.models import Campaign, CampaignCreator, CampaignStatus, Stage
 from creators.choices import Currency, Platform, Tier
 from creators.lists import clean_string_list
-from creators.models import Creator
+from creators.masters import lookup_named
+from creators.models import Country, Creator, Language
 
 DEFAULT_SHEET = Path(
     r"C:\Users\rahul\Downloads\Awisee Main DataBase - Centralised Database.csv"
@@ -472,8 +474,8 @@ class Command(BaseCommand):
                 defaults={
                     "influencer_name": profile["influencer_name"],
                     "niche": profile["niche"],
-                    "country": profile["country"],
-                    "language": profile["language"],
+                    "country": lookup_named(Country, profile["country"]),
+                    "language": lookup_named(Language, profile["language"] or "English"),
                     "followers": profile["followers"],
                     "tier": profile["tier"],
                     "email": profile["email"],
@@ -493,8 +495,9 @@ class Command(BaseCommand):
             if not created:
                 creator.influencer_name = profile["influencer_name"]
                 creator.niche = profile["niche"]
-                creator.country = profile["country"]
-                creator.language = profile["language"]
+                creator.country = lookup_named(Country, profile["country"])
+                if profile["language"]:
+                    creator.language = lookup_named(Language, profile["language"])
                 creator.followers = profile["followers"]
                 creator.tier = profile["tier"]
                 creator.email = profile["email"]
@@ -523,7 +526,6 @@ class Command(BaseCommand):
             )
             defaults = {
                 "stage": row["stage"],
-                "deliverables": row["deliverables"],
                 "deliverables_notes": row["deliverables_notes"],
                 "assigned_to": row["who_added"],
                 "email_outreached": row["email_outreached"],
@@ -549,6 +551,7 @@ class Command(BaseCommand):
                 else:
                     deal.margin_eur = deal.client_price_eur - deal.creator_price_eur
                 deal.save()
+            replace_deliverable_lines(deal, row["deliverables"])
             count += 1
         return count
 

@@ -14,6 +14,8 @@ from django.db import transaction
 
 from campaigns.models import Campaign, CampaignStatus
 from creators.choices import Platform
+from creators.masters import lookup_named
+from creators.models import Country
 
 DEFAULT_XLSX = Path(
     r"C:\Users\rahul\Downloads\Creator Brief - Campaign Requirements Intake (Dev Team).xlsx"
@@ -383,6 +385,16 @@ class Command(BaseCommand):
             user.save(update_fields=["password"])
         return user
 
+    def _set_markets(self, campaign, names):
+        if not names:
+            return
+        countries = []
+        for name in names:
+            country = lookup_named(Country, name)
+            if country is not None and country not in countries:
+                countries.append(country)
+        campaign.country_market.set(countries)
+
     def _save_campaign(self, brief: dict, owner) -> bool:
         campaign, created = Campaign.objects.get_or_create(
             client_name=brief["client_name"],
@@ -392,7 +404,6 @@ class Command(BaseCommand):
                 "status": brief["status"],
                 "creators_needed": brief["creators_needed"],
                 "deadline_to_scout": brief["deadline_to_scout"],
-                "country_market": brief["country_market"],
                 "platforms": brief["platforms"],
                 "niche_vertical": brief["niche_vertical"],
                 "sub_niche": brief["sub_niche"],
@@ -405,13 +416,14 @@ class Command(BaseCommand):
                 "remarks_brief": brief["remarks_brief"],
             },
         )
+        self._set_markets(campaign, brief["country_market"])
         if created:
             return True
         campaign.status = brief["status"]
         campaign.creators_needed = brief["creators_needed"]
         campaign.deadline_to_scout = brief["deadline_to_scout"] or campaign.deadline_to_scout
         if brief["country_market"]:
-            campaign.country_market = brief["country_market"]
+            self._set_markets(campaign, brief["country_market"])
         if brief["platforms"]:
             campaign.platforms = brief["platforms"]
         if brief["niche_vertical"]:
