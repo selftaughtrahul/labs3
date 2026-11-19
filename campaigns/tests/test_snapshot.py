@@ -82,10 +82,10 @@ class SnapshotTests(TestCase):
     def test_rate_card_edit_leaves_the_deal(self):
         rate = CreatorRate.objects.create(
             creator=self.creator,
-            deliverable=self.kind,
             price=Decimal("10.00"),
             currency=Currency.EUR,
         )
+        rate.deliverables.add(self.kind)
         self.deal.creator_price = Decimal("10.00")
         self.deal.creator_currency = Currency.EUR
         self.deal.creator_price_eur = Decimal("10.00")

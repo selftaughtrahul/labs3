@@ -5,6 +5,7 @@ import uuid
 from django.conf import settings
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
+from django.db.models.signals import m2m_changed
 
 from creators.choices import Currency, Platform, Tier
 from creators.lists import clean_string_list, cleaned
@@ -12,11 +13,14 @@ from creators.lists import clean_string_list, cleaned
 
 class Country(models.Model):
     name = models.CharField(max_length=120, unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table = "countries"
         ordering = ["name"]
         verbose_name_plural = "countries"
+        verbose_name = "country"
 
     def __str__(self):
         return self.name
@@ -24,10 +28,14 @@ class Country(models.Model):
 
 class Language(models.Model):
     name = models.CharField(max_length=120, unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table = "languages"
         ordering = ["name"]
+        verbose_name_plural = "languages"
+        verbose_name = "language"
 
     def __str__(self):
         return self.name
@@ -37,10 +45,13 @@ class DeliverableType(models.Model):
     """A post, reel, video, or other unit a creator can be hired for."""
 
     name = models.CharField(max_length=120, unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table = "deliverable_types"
         ordering = ["name"]
+        verbose_name_plural = "deliverable types"
 
     def __str__(self):
         return self.name
@@ -65,6 +76,7 @@ class Creator(models.Model):
         null=True,
         blank=True,
         related_name="creators",
+        verbose_name="country",
     )
     language = models.ForeignKey(
         Language,
@@ -72,6 +84,7 @@ class Creator(models.Model):
         null=True,
         blank=True,
         related_name="creators",
+        verbose_name="language",
     )
     tier = models.CharField(max_length=16, choices=Tier.choices, blank=True)
     followers = models.PositiveIntegerField(null=True, blank=True)
@@ -162,7 +175,11 @@ class Creator(models.Model):
 
 
 class CreatorRate(models.Model):
-    """The creator's current price for one deliverable. A campaign stores its own copy."""
+    """One current price. One deliverable, or several sold together as a bundle.
+
+    A campaign stores its own copy of the agreed price, so later edits here do not
+    change a campaign that already used this rate.
+    """
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     creator = models.ForeignKey(
@@ -170,10 +187,11 @@ class CreatorRate(models.Model):
         on_delete=models.CASCADE,
         related_name="rates",
     )
-    deliverable = models.ForeignKey(
+    deliverables = models.ManyToManyField(
         DeliverableType,
-        on_delete=models.PROTECT,
         related_name="rates",
+        verbose_name="deliverables",
+        help_text="Choose one for an individual rate. Choose several for one combined bundle price.",
     )
     price = models.DecimalField(
         max_digits=12,
@@ -181,15 +199,21 @@ class CreatorRate(models.Model):
         validators=[MinValueValidator(0)],
     )
     currency = models.CharField(max_length=8, choices=Currency.choices)
+    bundle_key = models.CharField(max_length=1000, blank=True, editable=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table = "creator_rates"
-        ordering = ["deliverable__name"]
+        ordering = ["created_at"]
+        verbose_name_plural = "creator rates"
+        verbose_name = "creator rate"
         constraints = [
             models.UniqueConstraint(
-                fields=["creator", "deliverable"],
-                name="creator_rate_deliverable_uniq",
-                violation_error_message="This creator already has a price for that deliverable.",
+                fields=["creator", "bundle_key"],
+                condition=~models.Q(bundle_key=""),
+                name="creator_rate_bundle_uniq",
+                violation_error_message="This creator already has a price for that combination.",
             ),
             models.CheckConstraint(
                 condition=models.Q(currency__in=Currency.values),
@@ -198,4 +222,38 @@ class CreatorRate(models.Model):
         ]
 
     def __str__(self):
-        return f"{self.deliverable} · {self.price} {self.currency}"
+        names = list(self.deliverables.order_by("name").values_list("name", flat=True))
+        label = " + ".join(names) if names else "No deliverables"
+        return f"{label} · {self.price} {self.currency}"
+
+    def deliverable_ids(self):
+        if self.pk is None:
+            return []
+        return list(self.deliverables.order_by("pk").values_list("pk", flat=True))
+
+    def same_bundle_exists(self, deliverable_ids):
+        """True when this creator already has a rate for exactly these deliverables."""
+        wanted = tuple(sorted(deliverable_ids))
+        if not wanted:
+            return False
+        others = CreatorRate.objects.filter(creator_id=self.creator_id)
+        if self.pk:
+            others = others.exclude(pk=self.pk)
+        for other in others:
+            if tuple(other.deliverable_ids()) == wanted:
+                return True
+        return False
+
+
+def remember_bundle(sender, instance, action, **kwargs):
+    """Remember the deliverable set so the same bundle cannot be priced twice."""
+    if action not in {"post_add", "post_remove", "post_clear"}:
+        return
+    key = ",".join(str(pk) for pk in instance.deliverable_ids())
+    if instance.bundle_key == key:
+        return
+    CreatorRate.objects.filter(pk=instance.pk).update(bundle_key=key)
+    instance.bundle_key = key
+
+
+m2m_changed.connect(remember_bundle, sender=CreatorRate.deliverables.through)

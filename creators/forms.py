@@ -1,9 +1,11 @@
 """Admin form helpers for comma-separated lists stored as JSON."""
 
 from django import forms
+from django.core.exceptions import ValidationError
+from django.forms.models import BaseInlineFormSet
 
 from creators.lists import clean_string_list
-from creators.models import Creator
+from creators.models import Creator, CreatorRate
 
 
 class StringListField(forms.CharField):
@@ -52,3 +54,46 @@ class CreatorAdminForm(CommaListForm):
     class Meta:
         model = Creator
         fields = "__all__"
+
+
+class CreatorRateForm(forms.ModelForm):
+    class Meta:
+        model = CreatorRate
+        fields = "__all__"
+
+    def clean(self):
+        cleaned = super().clean()
+        if self.errors:
+            return cleaned
+        deliverables = list(cleaned.get("deliverables") or [])
+        if not deliverables:
+            raise ValidationError(
+                {"deliverables": "Choose one deliverable, or several for a combined price."}
+            )
+        creator = cleaned.get("creator") or getattr(self.instance, "creator", None)
+        if creator is None or not getattr(creator, "pk", None):
+            return cleaned
+        ids = [item.pk for item in deliverables]
+        rate = self.instance
+        rate.creator = creator
+        if rate.same_bundle_exists(ids):
+            raise ValidationError(
+                {"deliverables": "This creator already has a price for that combination."}
+            )
+        return cleaned
+
+
+class CreatorRateFormSet(BaseInlineFormSet):
+    def clean(self):
+        super().clean()
+        seen = []
+        for form in self.forms:
+            if not hasattr(form, "cleaned_data") or form.cleaned_data.get("DELETE"):
+                continue
+            deliverables = form.cleaned_data.get("deliverables")
+            if not deliverables:
+                continue
+            ids = tuple(sorted(item.pk for item in deliverables))
+            if ids in seen:
+                form.add_error("deliverables", "This combination is already on the rate card.")
+            seen.append(ids)

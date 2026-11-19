@@ -4,15 +4,38 @@ from django.utils.html import format_html
 from campaigns.admin import CreatorDealInline
 from creators.models import Country, Creator, CreatorRate, DeliverableType, Language
 
-from .forms import CreatorAdminForm
+from .forms import CreatorAdminForm, CreatorRateForm, CreatorRateFormSet
 
 
-class CreatorRateInline(admin.TabularInline):
+class CreatorRateInline(admin.StackedInline):
     model = CreatorRate
+    form = CreatorRateForm
+    formset = CreatorRateFormSet
     extra = 0
-    autocomplete_fields = ("deliverable",)
-    fields = ("deliverable", "price", "currency")
+    autocomplete_fields = ("deliverables",)
+    fields = ("deliverables", "price", "currency")
     verbose_name_plural = "rate card"
+
+
+@admin.register(CreatorRate)
+class CreatorRateAdmin(admin.ModelAdmin):
+    form = CreatorRateForm
+    empty_value_display = "—"
+    list_display = ("creator", "deliverable_list", "price", "currency", "updated_at")
+    list_filter = ("currency",)
+    list_select_related = ("creator",)
+    search_fields = ("creator__influencer_name", "creator__email", "deliverables__name")
+    autocomplete_fields = ("creator", "deliverables")
+    readonly_fields = ("created_at", "updated_at")
+    ordering = ("-updated_at",)
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).prefetch_related("deliverables")
+
+    @admin.display(description="Deliverables")
+    def deliverable_list(self, obj):
+        names = sorted(item.name for item in obj.deliverables.all())
+        return " + ".join(names) if names else "—"
 
 
 @admin.register(Country, Language, DeliverableType)

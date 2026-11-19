@@ -26,6 +26,8 @@ class AdminPageTests(TestCase):
             reverse("admin:creators_deliverabletype_changelist"),
             reverse("admin:creators_creator_changelist"),
             reverse("admin:creators_creator_change", args=[self.creator.id]),
+            reverse("admin:creators_creatorrate_changelist"),
+            reverse("admin:creators_creatorrate_add"),
             reverse("admin:campaigns_campaign_changelist"),
             reverse("admin:campaigns_campaign_change", args=[self.campaign.id]),
             reverse("admin:campaigns_campaigncreator_changelist"),
