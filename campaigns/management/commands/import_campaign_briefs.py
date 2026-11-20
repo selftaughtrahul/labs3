@@ -1,4 +1,4 @@
-"""Load campaign briefs from the Creator Brief workbook in Downloads."""
+"""Load campaign briefs and the Campaign Master tracker into campaign rows."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
 from campaigns.models import Campaign, CampaignStatus
-from creators.choices import Platform
+from creators.choices import Currency, Platform
 from creators.masters import lookup_named
 from creators.models import Country
 
@@ -23,18 +23,36 @@ DEFAULT_XLSX = Path(
 DEFAULT_CSV = Path(
     r"C:\Users\rahul\Downloads\Creator Brief - Campaign Requirements Intake (Dev Team) - Campaign Requirements (1).csv"
 )
+DEFAULT_MASTER = Path(r"C:\Users\rahul\Downloads\Influencer Tracker - Main.xlsx")
 DEFAULT_PASSWORD = "12345"
 SHEET_USERNAME = "sheet"
 
-STATUS_ALIASES = {
+BRIEF_STATUS_ALIASES = {
     "new request": CampaignStatus.DRAFT,
     "in progress": CampaignStatus.SCOUTING,
     "pitch": CampaignStatus.OUTREACH,
     "scouting": CampaignStatus.SCOUTING,
     "ready for review": CampaignStatus.CLIENT_SHARING,
     "delivered": CampaignStatus.CLOSED,
-    "on hold": CampaignStatus.DRAFT,
-    "cancelled": CampaignStatus.CLOSED,
+    "on hold": CampaignStatus.ON_HOLD,
+    "cancelled": CampaignStatus.CANCELLED,
+    "canceled": CampaignStatus.CANCELLED,
+    "completed": CampaignStatus.CLOSED,
+}
+MASTER_STATUS_ALIASES = {
+    "active": CampaignStatus.ACTIVE,
+    "pre-campaign": CampaignStatus.PRE_CAMPAIGN,
+    "pre campaign": CampaignStatus.PRE_CAMPAIGN,
+    "pre- campaign": CampaignStatus.PRE_CAMPAIGN,
+    "scouting": CampaignStatus.SCOUTING,
+    "outreach": CampaignStatus.OUTREACH,
+    "awaiting payment": CampaignStatus.AWAITING_PAYMENT,
+    "on hold": CampaignStatus.ON_HOLD,
+    "unresponsive": CampaignStatus.UNRESPONSIVE,
+    "cancelled": CampaignStatus.CANCELLED,
+    "canceled": CampaignStatus.CANCELLED,
+    "completed": CampaignStatus.CLOSED,
+    "closed": CampaignStatus.CLOSED,
 }
 PLATFORM_WORDS = (
     ("instagram", Platform.INSTAGRAM),
@@ -47,59 +65,75 @@ PLATFORM_WORDS = (
     ("twitter", Platform.X),
 )
 HEADER_KEYS = {
-    "Client": "client",
-    "Priority": "priority",
-    "Priority Rank": "priority_rank",
-    "List Submitted": "list_submitted",
-    "Deadline to scout the profiles": "deadline",
-    "Primary Market": "primary_market",
-    "Additional Markets": "additional_markets",
-    "# Creators Needed": "creators_needed",
-    "Platform": "platform",
-    "Primary Niche / Vertical": "niche",
-    "Secondary Niche / Sub Niche": "sub_niche",
-    "Content Type": "content_type",
-    "Content Format": "content_format",
-    "Min Historical Sponsorship Quality": "sponsorship_quality",
-    "Age Range": "age_range",
-    "Gender": "gender",
-    "Interests": "interests",
-    "Audience Location": "audience_location",
-    "Audience Language": "audience_language",
-    "Min Followers": "min_followers",
-    "Max Followers/Tiers": "max_followers",
-    "Min Avg Views": "min_avg_views",
-    "Min Engagement Rate (%)": "min_engagement",
-    "Min Reach": "min_reach",
-    "Min View Consistency": "view_consistency",
-    "Min Audience Quality": "audience_quality",
-    "Max Rate per Deliverable (USD)": "max_rate",
-    "Deliverables per Creator": "deliverables",
-    "Usage Rights": "usage_rights",
-    "Exclusivity": "exclusivity",
-    "Prohibited Competitors": "competitors",
-    "Content History Flag": "content_history",
-    "Reputation Screening": "reputation",
-    "Status": "status",
-    "Delivery Deadline": "delivery_deadline",
-    "Notes": "notes",
-    "Brief": "brief",
-    "Search Keywords": "keywords",
-    "Approved or suggested profiles by client": "suggested_profiles",
-    "Ready for the Dev team": "ready",
-    "COMMENTS": "comments",
+    "client": "client",
+    "priority": "priority",
+    "priority rank": "priority_rank",
+    "list submitted": "list_submitted",
+    "deadline to scout the profiles": "deadline_to_scout",
+    "primary market": "primary_market",
+    "additional markets": "additional_markets",
+    "# creators needed": "creators_needed",
+    "platform": "platform",
+    "primary niche / vertical": "niche",
+    "secondary niche / sub niche": "sub_niche",
+    "content type": "content_type",
+    "content format": "content_format",
+    "min historical sponsorship quality": "sponsorship_quality",
+    "age range": "age_range",
+    "gender": "gender",
+    "interests": "interests",
+    "audience location": "audience_location",
+    "audience language": "audience_language",
+    "min followers": "min_followers",
+    "max followers/tiers": "max_followers",
+    "min avg views": "min_avg_views",
+    "min engagement rate (%)": "min_engagement",
+    "min reach": "min_reach",
+    "min view consistency": "view_consistency",
+    "min audience quality": "audience_quality",
+    "max rate per deliverable (usd)": "max_rate",
+    "deliverables per creator": "deliverables",
+    "usage rights": "usage_rights",
+    "exclusivity": "exclusivity",
+    "prohibited competitors": "competitors",
+    "content history flag": "content_history",
+    "reputation screening": "reputation",
+    "status": "status",
+    "delivery deadline": "delivery_deadline",
+    "notes": "notes",
+    "brief": "brief",
+    "search keywords": "keywords",
+    "approved or suggested profiles by client": "suggested_profiles",
+    "ready for the dev team": "ready",
+    "comments": "comments",
+}
+MASTER_HEADER_KEYS = {
+    "campaign name": "client_name",
+    "client poc name": "client_poc_name",
+    "team lead": "team_lead",
+    "poc": "poc",
+    "2nd poc": "second_poc",
+    "scouting/outreach": "scouting_team",
+    "start date": "start_date",
+    "deadline": "deadline",
+    "budget 3 months actual currency": "budget_amount",
+    "campaign currency": "budget_currency",
+    "conversion eur": "budget_eur",
+    "target creators": "creators_needed",
+    "campaign status": "status",
+    "last update date (dd/mm/yyyy)": "last_update_on",
+    "notes": "notes",
+    "internal working sheet": "working_sheet",
+    "cf list": "cf_list",
 }
 EXTRA_REMARK_FIELDS = (
-    "priority",
-    "list_submitted",
+    "priority_rank",
     "sponsorship_quality",
-    "age_range",
     "gender",
     "interests",
     "audience_location",
     "audience_language",
     "min_reach",
-    "view_consistency",
     "audience_quality",
     "max_rate",
     "deliverables",
@@ -115,6 +149,48 @@ EXTRA_REMARK_FIELDS = (
     "suggested_profiles",
     "comments",
 )
+TRACKER_FIELDS = (
+    "client_poc_name",
+    "team_lead",
+    "poc",
+    "second_poc",
+    "scouting_team",
+    "start_date",
+    "deadline",
+    "last_update_on",
+    "budget_amount",
+    "budget_currency",
+    "budget_eur",
+    "notes",
+    "working_sheet",
+    "cf_list",
+)
+BRIEF_FIELDS = (
+    "deadline_to_scout",
+    "platforms",
+    "niche_vertical",
+    "sub_niche",
+    "content_type",
+    "content_format",
+    "min_followers",
+    "max_followers",
+    "min_avg_views",
+    "min_engagement_rate",
+    "remarks_brief",
+    "priority",
+    "list_submitted",
+    "ready_for_dev",
+    "age_range",
+    "view_consistency",
+)
+
+
+def header_key(value) -> str:
+    return " ".join(str(value or "").split()).casefold()
+
+
+def name_key(value) -> str:
+    return " ".join(str(value or "").split()).casefold()
 
 
 def text(value) -> str:
@@ -127,12 +203,17 @@ def text(value) -> str:
     return " ".join(str(value).split())
 
 
+def is_blank(value) -> bool:
+    raw = text(value).casefold()
+    return raw in {"", "n/a", "na", "tbd", "none", "-", "#ref!", "#value!", "#n/a"}
+
+
 def parse_date(value):
     if isinstance(value, datetime):
         return value.date()
-    raw = text(value)
-    if not raw:
+    if is_blank(value):
         return None
+    raw = text(value)
     for fmt in ("%d/%m/%Y", "%d/%m/%y", "%Y-%m-%d"):
         try:
             return datetime.strptime(raw, fmt).date()
@@ -142,12 +223,12 @@ def parse_date(value):
 
 
 def parse_int(value):
+    if is_blank(value):
+        return None
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         number = int(value)
         return number if number >= 1 else None
     raw = text(value)
-    if not raw:
-        return None
     match = re.search(r"\d[\d,]*", raw)
     if not match:
         return None
@@ -156,6 +237,8 @@ def parse_int(value):
 
 
 def parse_decimal(value, maximum=None):
+    if is_blank(value):
+        return None
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         number = Decimal(str(value))
     else:
@@ -175,6 +258,26 @@ def parse_decimal(value, maximum=None):
     return number
 
 
+def parse_bool(value):
+    if isinstance(value, bool):
+        return value
+    if is_blank(value):
+        return None
+    raw = text(value).casefold()
+    if raw in {"true", "yes", "1"}:
+        return True
+    if raw in {"false", "no", "0"}:
+        return False
+    return None
+
+
+def parse_currency(value):
+    raw = text(value).upper()
+    if raw in Currency.values:
+        return raw
+    return ""
+
+
 def parse_platforms(value) -> list[str]:
     raw = text(value).lower()
     if not raw:
@@ -192,14 +295,17 @@ def parse_platforms(value) -> list[str]:
     return found
 
 
-def parse_status(value, default):
-    raw = text(value).lower()
-    if not raw or "/" in raw and "new request" in raw and "cancelled" in raw:
+def parse_status(value, aliases, default=None):
+    if is_blank(value):
         return default
-    return STATUS_ALIASES.get(raw, default)
+    raw = text(value).casefold()
+    if "/" in raw and "new request" in raw and "cancelled" in raw:
+        return default
+    raw = raw.replace("_", " ")
+    return aliases.get(raw, default)
 
 
-def parse_markets(*values) -> list[str]:
+def parse_markets(*values) -> tuple[list[str], list[str]]:
     names = []
     leftover = []
     for value in values:
@@ -246,12 +352,17 @@ def remarks_from(row: dict, extra_markets: list[str]) -> str:
     return "\n\n".join(blocks)
 
 
-def row_from_values(header, values) -> dict | None:
+def mapped_row(header, values, keys) -> dict:
     mapped = {}
     for index, name in enumerate(header):
-        key = HEADER_KEYS.get(name)
+        key = keys.get(header_key(name))
         if key and index < len(values):
             mapped[key] = values[index]
+    return mapped
+
+
+def brief_from_values(header, values) -> dict | None:
+    mapped = mapped_row(header, values, HEADER_KEYS)
     client = text(mapped.get("client"))
     if not client or is_example(client):
         return None
@@ -262,12 +373,11 @@ def row_from_values(header, values) -> dict | None:
     max_followers = parse_int(mapped.get("max_followers"))
     if min_followers and max_followers and max_followers < min_followers:
         max_followers = None
-    needed = parse_int(mapped.get("creators_needed")) or 1
     return {
         "client_name": client[:200],
-        "deadline_to_scout": parse_date(mapped.get("deadline")),
+        "deadline_to_scout": parse_date(mapped.get("deadline_to_scout")),
         "country_market": markets,
-        "creators_needed": needed,
+        "creators_needed": parse_int(mapped.get("creators_needed")),
         "platforms": parse_platforms(mapped.get("platform")),
         "niche_vertical": parse_list(mapped.get("niche")),
         "sub_niche": parse_list(mapped.get("sub_niche")),
@@ -279,12 +389,71 @@ def row_from_values(header, values) -> dict | None:
         "min_engagement_rate": parse_decimal(
             mapped.get("min_engagement"), maximum=Decimal("100")
         ),
-        "status": mapped.get("status"),
+        "status": parse_status(mapped.get("status"), BRIEF_STATUS_ALIASES),
         "remarks_brief": remarks_from(mapped, extra_markets),
+        "priority": parse_bool(mapped.get("priority")),
+        "list_submitted": parse_bool(mapped.get("list_submitted")),
+        "ready_for_dev": parse_bool(mapped.get("ready")),
+        "age_range": text(mapped.get("age_range"))[:80],
+        "view_consistency": text(mapped.get("view_consistency"))[:80],
+        "status_from_master": False,
     }
 
 
-def read_xlsx(path: Path) -> list[tuple[str, dict]]:
+def master_from_values(header, values) -> dict | None:
+    mapped = mapped_row(header, values, MASTER_HEADER_KEYS)
+    client = text(mapped.get("client_name"))
+    if not client or is_example(client) or client.casefold() == "campaign name":
+        return None
+    return {
+        "client_name": client[:200],
+        "client_poc_name": text(mapped.get("client_poc_name"))[:150],
+        "team_lead": text(mapped.get("team_lead"))[:150],
+        "poc": text(mapped.get("poc"))[:150],
+        "second_poc": text(mapped.get("second_poc"))[:150],
+        "scouting_team": text(mapped.get("scouting_team"))[:250],
+        "start_date": parse_date(mapped.get("start_date")),
+        "deadline": parse_date(mapped.get("deadline")),
+        "budget_amount": parse_decimal(mapped.get("budget_amount")),
+        "budget_currency": parse_currency(mapped.get("budget_currency")),
+        "budget_eur": parse_decimal(mapped.get("budget_eur")),
+        "creators_needed": parse_int(mapped.get("creators_needed")),
+        "status": parse_status(mapped.get("status"), MASTER_STATUS_ALIASES),
+        "last_update_on": parse_date(mapped.get("last_update_on")),
+        "notes": text(mapped.get("notes")),
+        "working_sheet": text(mapped.get("working_sheet"))[:250],
+        "cf_list": text(mapped.get("cf_list"))[:250],
+        "status_from_master": True,
+    }
+
+
+def overlay(base: dict, incoming: dict) -> dict:
+    merged = dict(base)
+    incoming_master = incoming.get("status_from_master")
+    for key, value in incoming.items():
+        if key == "status_from_master":
+            continue
+        if key == "client_name":
+            if not merged.get("client_name"):
+                merged["client_name"] = value
+            continue
+        if key == "status":
+            if value and (incoming_master or not merged.get("status")):
+                merged["status"] = value
+            continue
+        if key == "creators_needed":
+            if value and not merged.get("creators_needed"):
+                merged["creators_needed"] = value
+            continue
+        if value in (None, "", []):
+            continue
+        merged[key] = value
+    if incoming_master:
+        merged["status_from_master"] = True
+    return merged
+
+
+def read_brief_xlsx(path: Path) -> list[dict]:
     from openpyxl import load_workbook
 
     workbook = load_workbook(path, data_only=True)
@@ -300,32 +469,77 @@ def read_xlsx(path: Path) -> list[tuple[str, dict]]:
         header = [sheet.cell(header_row, column).value for column in range(1, sheet.max_column + 1)]
         for row_number in range(header_row + 1, sheet.max_row + 1):
             values = [sheet.cell(row_number, column).value for column in range(1, sheet.max_column + 1)]
-            parsed = row_from_values(header, values)
+            parsed = brief_from_values(header, values)
             if not parsed:
                 continue
-            parsed["status"] = parse_status(parsed["status"], default_status)
-            rows.append((sheet_name, parsed))
+            if parsed["status"] is None:
+                parsed["status"] = default_status
+            rows.append(parsed)
     return rows
 
 
-def read_csv(path: Path, default_status) -> list[tuple[str, dict]]:
+def read_brief_csv(path: Path, default_status) -> list[dict]:
     with path.open(newline="", encoding="utf-8-sig") as handle:
         raw_rows = list(csv.reader(handle))
-    if len(raw_rows) < 4:
+    header_index = next(
+        (index for index, row in enumerate(raw_rows[:6]) if "Client" in row),
+        None,
+    )
+    if header_index is None:
         return []
-    header = raw_rows[2]
+    header = raw_rows[header_index]
     rows = []
-    for values in raw_rows[3:]:
-        parsed = row_from_values(header, values)
+    for values in raw_rows[header_index + 1 :]:
+        parsed = brief_from_values(header, values)
         if not parsed:
             continue
-        parsed["status"] = parse_status(parsed["status"], default_status)
-        rows.append((path.name, parsed))
+        if parsed["status"] is None:
+            parsed["status"] = default_status
+        rows.append(parsed)
     return rows
+
+
+def read_campaign_master(path: Path) -> list[dict]:
+    from openpyxl import load_workbook
+
+    workbook = load_workbook(path, data_only=True)
+    if "Campaign Master" not in workbook.sheetnames:
+        return []
+    sheet = workbook["Campaign Master"]
+    rows = list(sheet.iter_rows(values_only=True))
+    header_index = next(
+        (
+            index
+            for index, row in enumerate(rows[:8])
+            if any(header_key(cell) == "campaign name" for cell in row)
+        ),
+        None,
+    )
+    if header_index is None:
+        return []
+    header = list(rows[header_index])
+    parsed_rows = []
+    for values in rows[header_index + 1 :]:
+        parsed = master_from_values(header, values)
+        if parsed:
+            parsed_rows.append(parsed)
+    return parsed_rows
+
+
+def collect_from_path(path: Path) -> tuple[list[dict], list[dict]]:
+    suffix = path.suffix.lower()
+    if suffix in {".xlsx", ".xlsm"}:
+        from openpyxl import load_workbook
+
+        names = load_workbook(path, read_only=True, data_only=True).sheetnames
+        if "Campaign Master" in names:
+            return [], read_campaign_master(path)
+        return read_brief_xlsx(path), []
+    return read_brief_csv(path, CampaignStatus.SCOUTING), []
 
 
 class Command(BaseCommand):
-    help = "Import campaign requirement sheets from Downloads."
+    help = "Import campaign briefs and the Campaign Master tracker from Downloads."
 
     def add_arguments(self, parser):
         parser.add_argument("paths", nargs="*")
@@ -334,41 +548,53 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         paths = [Path(item) for item in options["paths"]]
         if not paths:
-            paths = [DEFAULT_XLSX, DEFAULT_CSV]
+            paths = [DEFAULT_XLSX, DEFAULT_CSV, DEFAULT_MASTER]
         missing = [str(path) for path in paths if not path.is_file()]
         if missing:
             raise CommandError("Sheet not found: " + "; ".join(missing))
 
-        briefs = []
+        store = {}
+        brief_count = master_count = 0
         for path in paths:
-            if path.suffix.lower() in {".xlsx", ".xlsm"}:
-                briefs.extend(read_xlsx(path))
-            else:
-                briefs.extend(read_csv(path, CampaignStatus.SCOUTING))
-
-        by_name = {}
-        for source, brief in briefs:
-            by_name[brief["client_name"]] = (source, brief)
-        self.stdout.write(f"Parsed {len(briefs)} brief rows, {len(by_name)} unique clients.")
+            briefs, masters = collect_from_path(path)
+            brief_count += len(briefs)
+            master_count += len(masters)
+            for row in briefs:
+                self._store(store, row)
+            for row in masters:
+                self._store(store, row)
+        self.stdout.write(
+            f"Parsed {brief_count} brief rows and {master_count} tracker rows, "
+            f"{len(store)} unique campaigns."
+        )
         if options["dry_run"]:
-            for name, (source, brief) in sorted(by_name.items()):
+            for row in sorted(store.values(), key=lambda item: item["client_name"].casefold()):
                 self.stdout.write(
-                    f"  {name} [{source}] platforms={brief['platforms']} needed={brief['creators_needed']}"
+                    f"  {row['client_name']} status={row.get('status')} "
+                    f"needed={row.get('creators_needed')} lead={row.get('team_lead', '')}"
                 )
             return
 
         owner = self._sheet_user()
         created = updated = 0
         with transaction.atomic():
-            for name, (_source, brief) in by_name.items():
-                was_created = self._save_campaign(brief, owner)
-                if was_created:
+            for row in store.values():
+                if self._save_campaign(row, owner):
                     created += 1
                 else:
                     updated += 1
         self.stdout.write(
             self.style.SUCCESS(f"Imported {created} new campaigns and updated {updated}.")
         )
+
+    def _store(self, store: dict, row: dict):
+        key = name_key(row["client_name"])
+        if not key:
+            return
+        if key in store:
+            store[key] = overlay(store[key], row)
+            return
+        store[key] = dict(row)
 
     def _sheet_user(self):
         User = get_user_model()
@@ -395,50 +621,29 @@ class Command(BaseCommand):
                 countries.append(country)
         campaign.country_market.set(countries)
 
-    def _save_campaign(self, brief: dict, owner) -> bool:
-        campaign, created = Campaign.objects.get_or_create(
-            client_name=brief["client_name"],
-            defaults={
-                "campaign_owner": owner,
-                "created_by": owner,
-                "status": brief["status"],
-                "creators_needed": brief["creators_needed"],
-                "deadline_to_scout": brief["deadline_to_scout"],
-                "platforms": brief["platforms"],
-                "niche_vertical": brief["niche_vertical"],
-                "sub_niche": brief["sub_niche"],
-                "content_type": brief["content_type"],
-                "content_format": brief["content_format"],
-                "min_followers": brief["min_followers"],
-                "max_followers": brief["max_followers"],
-                "min_avg_views": brief["min_avg_views"],
-                "min_engagement_rate": brief["min_engagement_rate"],
-                "remarks_brief": brief["remarks_brief"],
-            },
-        )
-        self._set_markets(campaign, brief["country_market"])
+    def _save_campaign(self, row: dict, owner) -> bool:
+        campaign = Campaign.objects.filter(client_name__iexact=row["client_name"]).first()
+        created = campaign is None
         if created:
-            return True
-        campaign.status = brief["status"]
-        campaign.creators_needed = brief["creators_needed"]
-        campaign.deadline_to_scout = brief["deadline_to_scout"] or campaign.deadline_to_scout
-        if brief["country_market"]:
-            self._set_markets(campaign, brief["country_market"])
-        if brief["platforms"]:
-            campaign.platforms = brief["platforms"]
-        if brief["niche_vertical"]:
-            campaign.niche_vertical = brief["niche_vertical"]
-        if brief["sub_niche"]:
-            campaign.sub_niche = brief["sub_niche"]
-        if brief["content_type"]:
-            campaign.content_type = brief["content_type"]
-        if brief["content_format"]:
-            campaign.content_format = brief["content_format"]
-        campaign.min_followers = brief["min_followers"]
-        campaign.max_followers = brief["max_followers"]
-        campaign.min_avg_views = brief["min_avg_views"]
-        campaign.min_engagement_rate = brief["min_engagement_rate"]
-        if brief["remarks_brief"]:
-            campaign.remarks_brief = brief["remarks_brief"]
+            campaign = Campaign(
+                client_name=row["client_name"],
+                campaign_owner=owner,
+                created_by=owner,
+                status=row.get("status") or CampaignStatus.DRAFT,
+                creators_needed=row.get("creators_needed") or 10,
+            )
+        self._apply(campaign, row)
         campaign.save()
-        return False
+        self._set_markets(campaign, row.get("country_market") or [])
+        return created
+
+    def _apply(self, campaign, row: dict):
+        if row.get("status"):
+            campaign.status = row["status"]
+        if row.get("creators_needed"):
+            campaign.creators_needed = row["creators_needed"]
+        for name in BRIEF_FIELDS + TRACKER_FIELDS:
+            value = row.get(name)
+            if value in (None, "", []):
+                continue
+            setattr(campaign, name, value)

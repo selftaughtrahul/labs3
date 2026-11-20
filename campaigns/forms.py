@@ -12,7 +12,10 @@ class CampaignAdminForm(CommaListForm):
     class Meta:
         model = Campaign
         fields = "__all__"
-        widgets = {"remarks_brief": forms.Textarea(attrs={"rows": 5})}
+        widgets = {
+            "remarks_brief": forms.Textarea(attrs={"rows": 5}),
+            "notes": forms.Textarea(attrs={"rows": 4}),
+        }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

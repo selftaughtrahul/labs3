@@ -15,9 +15,15 @@ from creators.lists import clean_string_list, cleaned
 
 class CampaignStatus(models.TextChoices):
     DRAFT = "draft", "Draft"
+    PRE_CAMPAIGN = "pre_campaign", "Pre-campaign"
     SCOUTING = "scouting", "Scouting"
     OUTREACH = "outreach", "Outreach"
+    ACTIVE = "active", "Active"
     CLIENT_SHARING = "client_sharing", "Client sharing"
+    AWAITING_PAYMENT = "awaiting_payment", "Awaiting payment"
+    ON_HOLD = "on_hold", "On hold"
+    UNRESPONSIVE = "unresponsive", "Unresponsive"
+    CANCELLED = "cancelled", "Cancelled"
     CLOSED = "closed", "Closed"
 
 
@@ -112,6 +118,44 @@ class Campaign(models.Model):
         default=CampaignStatus.DRAFT,
     )
     remarks_brief = models.TextField(blank=True, verbose_name="brief")
+    client_poc_name = models.CharField(max_length=150, blank=True, verbose_name="client contact")
+    team_lead = models.CharField(max_length=150, blank=True)
+    poc = models.CharField(max_length=150, blank=True, verbose_name="POC")
+    second_poc = models.CharField(max_length=150, blank=True, verbose_name="second POC")
+    scouting_team = models.CharField(max_length=250, blank=True)
+    start_date = models.DateField(null=True, blank=True)
+    deadline = models.DateField(null=True, blank=True, verbose_name="campaign deadline")
+    last_update_on = models.DateField(null=True, blank=True, verbose_name="last update")
+    budget_amount = models.DecimalField(
+        max_digits=14,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(0)],
+        verbose_name="budget",
+    )
+    budget_currency = models.CharField(
+        max_length=8,
+        choices=Currency.choices,
+        blank=True,
+        verbose_name="budget currency",
+    )
+    budget_eur = models.DecimalField(
+        max_digits=14,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(0)],
+        verbose_name="budget in EUR",
+    )
+    notes = models.TextField(blank=True)
+    working_sheet = models.CharField(max_length=250, blank=True)
+    cf_list = models.CharField(max_length=250, blank=True, verbose_name="CF list")
+    priority = models.BooleanField(null=True, blank=True)
+    list_submitted = models.BooleanField(null=True, blank=True)
+    ready_for_dev = models.BooleanField(null=True, blank=True, verbose_name="ready for the team")
+    age_range = models.CharField(max_length=80, blank=True)
+    view_consistency = models.CharField(max_length=80, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -146,6 +190,19 @@ class Campaign(models.Model):
         self.client_name = " ".join((self.client_name or "").split())
         self.content_type = " ".join((self.content_type or "").split())
         self.content_format = " ".join((self.content_format or "").split())
+        self.client_poc_name = " ".join((self.client_poc_name or "").split())
+        self.team_lead = " ".join((self.team_lead or "").split())
+        self.poc = " ".join((self.poc or "").split())
+        self.second_poc = " ".join((self.second_poc or "").split())
+        self.scouting_team = " ".join((self.scouting_team or "").split())
+        self.working_sheet = " ".join((self.working_sheet or "").split())
+        self.cf_list = " ".join((self.cf_list or "").split())
+        self.age_range = " ".join((self.age_range or "").split())
+        self.view_consistency = " ".join((self.view_consistency or "").split())
+        self.notes = (self.notes or "").strip()
+        self.remarks_brief = (self.remarks_brief or "").strip()
+        if self.budget_amount is None:
+            self.budget_currency = ""
         self.niche_vertical = cleaned("niche_vertical", clean_string_list, self.niche_vertical)
         self.sub_niche = cleaned("sub_niche", clean_string_list, self.sub_niche)
         self.platforms = cleaned("platforms", clean_string_list, self.platforms)

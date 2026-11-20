@@ -147,36 +147,78 @@ class CampaignAdmin(admin.ModelAdmin):
     list_display = (
         "client_name",
         "status_badge",
-        "campaign_owner",
+        "team_lead",
+        "deadline",
+        "budget_display",
         "creators_needed",
         "deal_count",
-        "deadline_to_scout",
         "updated_at",
     )
     list_display_links = ("client_name",)
-    list_filter = ("status", "campaign_owner", "deadline_to_scout")
+    list_filter = ("status", "priority", "team_lead", "campaign_owner")
     search_fields = (
         "client_name",
+        "team_lead",
+        "poc",
+        "client_poc_name",
         "campaign_owner__username",
         "created_by__username",
         "remarks_brief",
+        "notes",
     )
-    date_hierarchy = "deadline_to_scout"
+    date_hierarchy = "deadline"
     filter_horizontal = ("country_market",)
-    radio_fields = {"status": admin.HORIZONTAL}
     readonly_fields = ("id", "created_by", "created_at", "updated_at")
     fieldsets = (
         (
             "Brief",
             {
-                "description": "One row per client brief. It stays Draft while the brief is being filled in.",
+                "description": "One row per client brief.",
                 "fields": (
                     "client_name",
                     "status",
                     "campaign_owner",
-                    "deadline_to_scout",
                     "creators_needed",
                     "remarks_brief",
+                    "notes",
+                ),
+            },
+        ),
+        (
+            "People",
+            {
+                "fields": (
+                    "client_poc_name",
+                    "team_lead",
+                    "poc",
+                    "second_poc",
+                    "scouting_team",
+                ),
+            },
+        ),
+        (
+            "Schedule",
+            {
+                "fields": ("start_date", "deadline_to_scout", "deadline", "last_update_on"),
+            },
+        ),
+        (
+            "Budget",
+            {
+                "fields": ("budget_amount", "budget_currency", "budget_eur"),
+            },
+        ),
+        (
+            "Intake",
+            {
+                "fields": (
+                    "priority",
+                    "list_submitted",
+                    "ready_for_dev",
+                    "age_range",
+                    "view_consistency",
+                    "working_sheet",
+                    "cf_list",
                 ),
             },
         ),
@@ -228,6 +270,10 @@ class CampaignAdmin(admin.ModelAdmin):
     @admin.display(description="Status", ordering="status")
     def status_badge(self, obj):
         return obj.get_status_display()
+
+    @admin.display(description="Budget", ordering="budget_amount")
+    def budget_display(self, obj):
+        return money(obj.budget_amount, obj.budget_currency)
 
 
 @admin.register(CampaignCreator)
