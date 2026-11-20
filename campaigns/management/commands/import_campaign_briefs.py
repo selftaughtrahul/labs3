@@ -195,8 +195,27 @@ def header_key(value) -> str:
     return " ".join(str(value or "").split()).casefold()
 
 
+# Brief spellings that are the same campaign as the Campaign Master name.
+CLIENT_ALIASES = {
+    "uniliver": "Unilever",
+    "expressvpn": "Express VPN",
+    "pu prime latam": "PUPrime Latam",
+    "brazy / ggdrop": "Brazy",
+    "bc game": "BC.Games",
+    "blackcat": "BlackCatCard",
+    "nxtfluencez (moomoo)": "Nxtfluencez",
+    "xmox (casa media)": "Casa Media",
+    "contentlab = agency (canva)": "Canva",
+}
+
+
+def canonical_client(value) -> str:
+    cleaned = " ".join(str(value or "").split())
+    return CLIENT_ALIASES.get(cleaned.casefold(), cleaned)
+
+
 def name_key(value) -> str:
-    return " ".join(str(value or "").split()).casefold()
+    return canonical_client(value).casefold()
 
 
 def text(value) -> str:
@@ -409,7 +428,7 @@ def brief_from_values(header, values) -> dict | None:
     if min_followers and max_followers and max_followers < min_followers:
         max_followers = None
     return {
-        "client_name": client[:200],
+        "client_name": canonical_client(client)[:200],
         "deadline_to_scout": parse_date(mapped.get("deadline_to_scout")),
         "country_market": markets,
         "creators_needed": parse_int(mapped.get("creators_needed")),
@@ -436,7 +455,7 @@ def master_from_values(header, values) -> dict | None:
     if not client or is_example(client) or client.casefold() == "campaign name":
         return None
     return {
-        "client_name": client[:200],
+        "client_name": canonical_client(client)[:200],
         "client_poc_name": text(mapped.get("client_poc_name"))[:150],
         "team_lead": text(mapped.get("team_lead"))[:150],
         "poc_names": split_people(mapped.get("poc")) + [

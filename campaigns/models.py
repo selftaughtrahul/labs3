@@ -195,100 +195,26 @@ class CampaignCreator(models.Model):
     """One creator inside one campaign. Price and stage belong here, not on the profile."""
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    campaign = models.ForeignKey(
-        Campaign,
-        on_delete=models.PROTECT,
-        related_name="deals",
-    )
-    creator = models.ForeignKey(
-        "creators.Creator",
-        on_delete=models.PROTECT,
-        related_name="deals",
-    )
-    stage = models.CharField(
-        max_length=32,
-        choices=Stage.choices,
-        default=Stage.SHORTLISTED,
-    )
-    fit_notes = models.TextField(
-        blank=True,
-        help_text="Why this profile fits the brief.",
-    )
+    campaign = models.ForeignKey(Campaign,on_delete=models.PROTECT,related_name="deals")
+    creator = models.ForeignKey("creators.Creator",on_delete=models.PROTECT,related_name="deals")
+    stage = models.CharField( max_length=32,choices=Stage.choices,default=Stage.SHORTLISTED)
+    fit_notes = models.TextField(blank=True,help_text="Why this profile fits the brief.")
     deliverables_notes = models.TextField(blank=True)
-    assigned_to = models.CharField(
-        max_length=150,
-        blank=True,
-        verbose_name="outreach owner",
-    )
+    assigned_to = models.CharField(max_length=150,blank=True,verbose_name="outreach owner")
     email_outreached = models.CharField(max_length=150, blank=True)
     sent_date = models.DateField(null=True, blank=True)
     fx_lock_date = models.DateField(null=True, blank=True, verbose_name="FX lock date")
-    creator_price = models.DecimalField(
-        max_digits=12,
-        decimal_places=2,
-        null=True,
-        blank=True,
-        validators=[MinValueValidator(0)],
-        help_text="What we pay the creator. The client never sees this.",
-    )
-    creator_currency = models.CharField(
-        max_length=8,
-        choices=Currency.choices,
-        blank=True,
-        verbose_name="creator currency",
-    )
-    creator_price_eur = models.DecimalField(
-        max_digits=12,
-        decimal_places=2,
-        null=True,
-        blank=True,
-        validators=[MinValueValidator(0)],
-        help_text="Same as the creator price when the currency is EUR.",
-        verbose_name="creator price in EUR",
-    )
-    client_price = models.DecimalField(
-        max_digits=12,
-        decimal_places=2,
-        null=True,
-        blank=True,
-        validators=[MinValueValidator(0)],
-        help_text="What the client pays us.",
-    )
-    client_currency = models.CharField(
-        max_length=8,
-        choices=Currency.choices,
-        blank=True,
-        verbose_name="client currency",
-    )
-    client_price_eur = models.DecimalField(
-        max_digits=12,
-        decimal_places=2,
-        null=True,
-        blank=True,
-        validators=[MinValueValidator(0)],
-        help_text="Same as the client price when the currency is EUR.",
-        verbose_name="client price in EUR",
-    )
-    margin_eur = models.DecimalField(
-        max_digits=12,
-        decimal_places=2,
-        null=True,
-        blank=True,
-        editable=False,
-        help_text="Client EUR minus creator EUR. Calculated on save.",
-        verbose_name="margin in EUR",
-    )
-    date_confirmed = models.DateField(
-        null=True,
-        blank=True,
-        verbose_name="confirmed on",
-    )
-    client_status = models.CharField(
-        max_length=16,
-        choices=Decision.choices,
-        blank=True,
-        verbose_name="client answer",
-    )
+    creator_price = models.DecimalField(max_digits=12,decimal_places=2,
+    null=True,blank=True,validators=[MinValueValidator(0)],help_text="What we pay the creator. The client never sees this.")
+    creator_currency = models.CharField(max_length=8,choices=Currency.choices,blank=True,verbose_name="creator currency")
+    creator_price_eur = models.DecimalField(max_digits=12,decimal_places=2,null=True,blank=True,validators=[MinValueValidator(0)],help_text="Same as the creator price when the currency is EUR.",verbose_name="creator price in EUR")
+    client_price = models.DecimalField(max_digits=12,decimal_places=2,null=True,blank=True,validators=[MinValueValidator(0)],help_text="What the client pays us.")
+    client_currency = models.CharField(max_length=8,choices=Currency.choices,blank=True,verbose_name="client currency")
+    client_price_eur = models.DecimalField(max_digits=12,decimal_places=2,null=True,blank=True,validators=[MinValueValidator(0)],help_text="Same as the client price when the currency is EUR.",verbose_name="client price in EUR")
+    margin_eur = models.DecimalField(max_digits=12,
+    decimal_places=2,null=True,blank=True,editable=False,help_text="Client EUR minus creator EUR. Calculated on save.",verbose_name="margin in EUR")
+    date_confirmed = models.DateField(null=True,blank=True,verbose_name="confirmed on")
+    client_status = models.CharField(max_length=16,choices=Decision.choices,blank=True,verbose_name="client answer")
     client_remarks = models.TextField(blank=True)
     added_by = models.CharField(max_length=150, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)

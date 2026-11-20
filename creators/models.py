@@ -60,85 +60,24 @@ class DeliverableType(models.Model):
 class Creator(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     platform = models.CharField(max_length=32, choices=Platform.choices)
-    profile_link = models.URLField(
-        max_length=500,
-        help_text="Unique together with the platform, so the same profile cannot be added twice.",
-    )
+    profile_link = models.URLField(max_length=500,help_text="Unique together with the platform, so the same profile cannot be added twice.")
     influencer_name = models.CharField(max_length=200, verbose_name="name")
-    niche = models.JSONField(
-        default=list,
-        blank=True,
-        help_text="Comma-separated, for example beauty, skincare.",
-    )
-    country = models.ForeignKey(
-        Country,
-        on_delete=models.PROTECT,
-        null=True,
-        blank=True,
-        related_name="creators",
-        verbose_name="country",
-    )
-    language = models.ForeignKey(
-        Language,
-        on_delete=models.PROTECT,
-        null=True,
-        blank=True,
-        related_name="creators",
-        verbose_name="language",
-    )
+    niche = models.JSONField(default=list,blank=True,help_text="Comma-separated, for example beauty, skincare.")
+    country = models.ForeignKey(Country,on_delete=models.PROTECT,null=True,blank=True,related_name="creators",verbose_name="country")
+    language = models.ForeignKey(Language,on_delete=models.PROTECT,null=True,blank=True,related_name="creators",verbose_name="language")
     tier = models.CharField(max_length=16, choices=Tier.choices, blank=True)
     followers = models.PositiveIntegerField(null=True, blank=True)
     email = models.EmailField(blank=True)
-    engagement_rate = models.DecimalField(
-        max_digits=5,
-        decimal_places=2,
-        null=True,
-        blank=True,
-        validators=[MinValueValidator(0), MaxValueValidator(100)],
-        help_text="Percent, for example 2.50.",
-        verbose_name="engagement %",
-    )
-    avg_views = models.PositiveIntegerField(
-        null=True,
-        blank=True,
-        verbose_name="average views",
-    )
+    engagement_rate = models.DecimalField(max_digits=5,decimal_places=2,null=True,blank=True,validators=[MinValueValidator(0), MaxValueValidator(100)],help_text="Percent, for example 2.50.",verbose_name="engagement %")
+    avg_views = models.PositiveIntegerField(null=True,blank=True,verbose_name="average views")
     other_contact = models.CharField(max_length=250, blank=True)
     audience_insights = models.TextField(blank=True)
     geo = models.CharField(max_length=120, blank=True)
-    female_pct = models.DecimalField(
-        max_digits=5,
-        decimal_places=2,
-        null=True,
-        blank=True,
-        validators=[MinValueValidator(0), MaxValueValidator(100)],
-        verbose_name="female %",
-    )
-    male_pct = models.DecimalField(
-        max_digits=5,
-        decimal_places=2,
-        null=True,
-        blank=True,
-        validators=[MinValueValidator(0), MaxValueValidator(100)],
-        verbose_name="male %",
-    )
-    is_profile_checked = models.BooleanField(
-        default=False,
-        help_text="Tick this after a person has reviewed the profile.",
-        verbose_name="profile checked",
-    )
-    source = models.CharField(
-        max_length=64,
-        blank=True,
-        help_text="Where the profile came from, for example sheet or manual.",
-    )
-    added_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.PROTECT,
-        related_name="added_creators",
-        null=True,
-        blank=True,
-    )
+    female_pct = models.DecimalField(max_digits=5,decimal_places=2,null=True,blank=True,validators=[MinValueValidator(0), MaxValueValidator(100)],verbose_name="female %")
+    male_pct = models.DecimalField(max_digits=5,decimal_places=2,null=True,blank=True,validators=[MinValueValidator(0), MaxValueValidator(100)],verbose_name="male %")
+    is_profile_checked = models.BooleanField(default=False,help_text="Tick this after a person has reviewed the profile.",verbose_name="profile checked")
+    source = models.CharField(max_length=64,blank=True,help_text="Where the profile came from, for example sheet or manual.")
+    added_by = models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.PROTECT,related_name="added_creators",null=True,blank=True)
     added_at = models.DateField(null=True, blank=True, verbose_name="added on")
     updated_at = models.DateTimeField(auto_now=True)
 
