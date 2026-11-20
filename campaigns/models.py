@@ -124,11 +124,19 @@ class Campaign(models.Model):
 class Stage(models.TextChoices):
     SHORTLISTED = "shortlisted", "Shortlisted"
     CONTACTED = "contacted", "Contacted"
+    FOLLOW_UP = "follow_up", "Follow-up"
+    REPLIED = "replied", "Replied"
     NEGOTIATING = "negotiating", "Negotiating"
+    VERBAL_AGREEMENT = "verbal_agreement", "Verbal agreement"
     CONFIRMED = "confirmed", "Confirmed"
     SHARED = "shared_with_client", "Shared with client"
     NOT_INTERESTED = "not_interested", "Not interested"
     UNRESPONSIVE = "unresponsive", "Unresponsive"
+    NOT_STARTED = "not_started", "Not started"
+    IN_PROGRESS = "in_progress", "In progress"
+    APPROVED = "approved", "Approved"
+    COMPLETED = "completed", "Completed"
+    CANCELLED = "cancelled", "Cancelled"
 
 
 class Decision(models.TextChoices):

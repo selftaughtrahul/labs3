@@ -13,15 +13,14 @@ from collections import Counter, defaultdict
 from datetime import date, datetime, time, timezone as dt_timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
-from urllib.parse import unquote, urlsplit
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.management.base import BaseCommand, CommandError
 from django.core.validators import validate_email
-from django.db import connection, transaction
+from django.db import close_old_connections, connection
 
-from campaigns.deliverables import replace_deliverable_lines
+from campaigns.deliverables import replace_deliverable_lines_bulk
 from campaigns.models import (
     Campaign,
     CampaignCreator,
@@ -30,10 +29,10 @@ from campaigns.models import (
     Direction,
     Outreach,
     OutreachStatus,
-    Stage,
 )
+from campaigns.sheet_status import map_campaign_status, map_deal_stage
 from creators.lists import clean_string_list
-from creators.masters import lookup_named
+from creators.masters import MasterCache
 from creators.management.commands.import_central_sheet import (
     keep_last,
     normalize_budget,
@@ -43,8 +42,10 @@ from creators.management.commands.import_central_sheet import (
     username_from_name,
 )
 from creators.models import Country, Creator, Language
+from creators.profile_links import canonical_link, profile_key
+from creators.rates import ensure_rates
 
-DEFAULT_SHEET = Path(r"C:\Users\rahul\Downloads\Influencer_Prospecting_Flow 2026.xlsx")
+DEFAULT_SHEET = Path(r"C:\Users\rahul\Downloads\Influencer_Prospecting_Flow 2026 (1).xlsx")
 SOURCE = "prospecting"
 
 RECORD_TABS = (
@@ -91,30 +92,15 @@ HEADER_FIELDS = {
     "female": "female_pct",
     "male": "male_pct",
 }
-STATUS_MAP = {
-    "sent": (Stage.CONTACTED, OutreachStatus.SENT),
-    "follow up": (Stage.CONTACTED, OutreachStatus.FOLLOW_UP),
-    "follow up 2": (Stage.CONTACTED, OutreachStatus.FOLLOW_UP),
-    "follow up 3": (Stage.CONTACTED, OutreachStatus.FOLLOW_UP),
-    "replied": (Stage.NEGOTIATING, OutreachStatus.REPLIED),
-    "negotiating": (Stage.NEGOTIATING, OutreachStatus.NEGOTIATING),
-    "confirmed": (Stage.CONFIRMED, OutreachStatus.CONFIRMED),
-    "not interested": (Stage.NOT_INTERESTED, OutreachStatus.NOT_INTERESTED),
-    "unresponsive": (Stage.UNRESPONSIVE, OutreachStatus.UNRESPONSIVE),
-    "invalid email email error": (Stage.UNRESPONSIVE, OutreachStatus.UNRESPONSIVE),
-    "bounced": (Stage.UNRESPONSIVE, OutreachStatus.UNRESPONSIVE),
-    "not available as of the moment": (Stage.NOT_INTERESTED, OutreachStatus.NOT_INTERESTED),
-}
 BRIEF_STATUS = {
-    "active": CampaignStatus.OUTREACH,
-    "completed": CampaignStatus.CLOSED,
-    "cancelled": CampaignStatus.CLOSED,
-    "canceled": CampaignStatus.CLOSED,
-    "declined": CampaignStatus.CLOSED,
-    "on hold": CampaignStatus.DRAFT,
-    "pending": CampaignStatus.DRAFT,
+    "active": CampaignStatus.ACTIVE,
+    "completed": CampaignStatus.COMPLETED,
+    "cancelled": CampaignStatus.CANCELLED,
+    "canceled": CampaignStatus.CANCELLED,
+    "declined": CampaignStatus.CANCELLED,
+    "on hold": CampaignStatus.ON_HOLD,
+    "pending": CampaignStatus.PENDING,
 }
-PATH_SUFFIXES = ("/videos", "/featured", "/shorts", "/about", "/streams", "/reels")
 
 
 def plain(value) -> str:
@@ -221,31 +207,6 @@ def parse_email(value) -> str:
     return text
 
 
-def canonical_link(value) -> str:
-    raw = plain(value)
-    if not raw or "do not add" in raw.lower() or raw.startswith("#"):
-        return ""
-    if not re.match(r"^https?://", raw, re.I):
-        raw = f"https://{raw}"
-    parts = urlsplit(raw)
-    host = parts.netloc.lower().removeprefix("www.")
-    if not host or "." not in host:
-        return ""
-    path = unquote(parts.path).rstrip("/")
-    lowered = path.lower()
-    for suffix in PATH_SUFFIXES:
-        if lowered.endswith(suffix):
-            path = path[: -len(suffix)]
-            lowered = path.lower()
-            break
-    path = path.rstrip("/")
-    return f"https://{host}{path}"[:500]
-
-
-def profile_key(platform, link) -> tuple[str, str]:
-    return platform, canonical_link(link).lower()
-
-
 def parse_channel(method) -> str:
     first = plain(method).split(",")[0]
     key = status_key(first)
@@ -265,14 +226,7 @@ def parse_channel(method) -> str:
 
 
 def map_status(value, default_status):
-    key = status_key(value) or default_status
-    if not key:
-        return Stage.SHORTLISTED, "", False
-    mapped = STATUS_MAP.get(key)
-    if mapped is None:
-        return Stage.CONTACTED, OutreachStatus.SENT, True
-    stage, outreach_status = mapped
-    return stage, outreach_status, True
+    return map_deal_stage(value, default_status)
 
 
 def filled(value) -> bool:
@@ -290,8 +244,9 @@ class Command(BaseCommand):
         path = Path(options["path"])
         if not path.is_file():
             raise CommandError(f"Workbook not found: {path}")
-        with connection.cursor() as cursor:
-            cursor.execute("PRAGMA busy_timeout = 60000")
+        if connection.vendor == "sqlite":
+            with connection.cursor() as cursor:
+                cursor.execute("PRAGMA busy_timeout = 60000")
 
         rows, skipped, unknown = self._read(path)
         profiles, deals, campaign_names = self._collapse(rows)
@@ -307,18 +262,35 @@ class Command(BaseCommand):
             self._preview(profiles, deals, campaign_names)
             return
 
-        with transaction.atomic():
-            users = self._users()
-            campaigns = self._campaigns(campaign_names, deals, users)
-            creators, new_creators, updated_creators = self._creators(profiles, users)
-            new_deals, updated_deals = self._deals(deals, campaigns, creators)
-            messages = self._outreach(deals, campaigns, creators)
-            brief_updates = self._briefs(briefs, campaigns, users)
+        self._touch_db()
+        self.countries = MasterCache(Country)
+        self.languages = MasterCache(Language)
+        self.countries.ensure(profile["country"] for profile in profiles.values())
+        self.languages.ensure(
+            [profile["language"] for profile in profiles.values()] + ["English"]
+        )
+        self.stdout.write("Masters loaded.")
+        self._touch_db()
+        users = self._users()
+        campaigns = self._campaigns(campaign_names, deals, users)
+        self.stdout.write(f"Campaigns ready ({len(campaigns)}).")
+        self._touch_db()
+        creators, new_creators, updated_creators = self._creators(profiles, users)
+        self.stdout.write(f"Creators +{new_creators} updated {updated_creators}.")
+        self._touch_db()
+        new_deals, updated_deals = self._deals(deals, campaigns, creators)
+        self.stdout.write(f"Deals +{new_deals} updated {updated_deals}.")
+        self._touch_db()
+        new_rates = self._rates(deals, creators)
+        self.stdout.write(f"Rates +{new_rates}.")
+        self._touch_db()
+        messages = self._outreach(deals, campaigns, creators)
+        brief_updates = self._briefs(briefs, campaigns, users)
         self.stdout.write(
             self.style.SUCCESS(
                 f"Creators +{new_creators} updated {updated_creators}. "
                 f"Deals +{new_deals} updated {updated_deals}. "
-                f"Outreach rows {messages}. Briefs applied {brief_updates}."
+                f"Rates +{new_rates}. Outreach rows {messages}. Briefs applied {brief_updates}."
             )
         )
 
@@ -329,22 +301,25 @@ class Command(BaseCommand):
         rows = []
         skipped = 0
         unknown = set()
-        for sheet_name, _tab, priority, default_status in RECORD_TABS:
-            sheet = workbook[sheet_name]
-            table = sheet.iter_rows(values_only=True)
-            header = [header_key(cell) for cell in next(table)]
-            fields = [HEADER_FIELDS.get(name, "") for name in header]
-            for raw in table:
-                mapped = {
-                    fields[index]: raw[index]
-                    for index in range(min(len(fields), len(raw)))
-                    if fields[index]
-                }
-                parsed = self._parse_row(mapped, priority, default_status, unknown)
-                if parsed is None:
-                    skipped += 1
-                    continue
-                rows.append(parsed)
+        try:
+            for sheet_name, _tab, priority, default_status in RECORD_TABS:
+                sheet = workbook[sheet_name]
+                table = sheet.iter_rows(values_only=True)
+                header = [header_key(cell) for cell in next(table)]
+                fields = [HEADER_FIELDS.get(name, "") for name in header]
+                for raw in table:
+                    mapped = {
+                        fields[index]: raw[index]
+                        for index in range(min(len(fields), len(raw)))
+                        if fields[index]
+                    }
+                    parsed = self._parse_row(mapped, priority, default_status, unknown)
+                    if parsed is None:
+                        skipped += 1
+                        continue
+                    rows.append(parsed)
+        finally:
+            workbook.close()
         return rows, skipped, unknown
 
     def _parse_row(self, raw, priority, default_status, unknown):
@@ -482,32 +457,36 @@ class Command(BaseCommand):
         import openpyxl
 
         workbook = openpyxl.load_workbook(path, read_only=True, data_only=True)
-        sheet = workbook["Briefs - Internal (CF)"]
-        table = sheet.iter_rows(values_only=True)
-        header = [header_key(cell) for cell in next(table)]
-        wanted = {
-            "campaign": "campaign",
-            "campaign status": "status",
-            "brief": "brief",
-            "campaign owner": "owner",
-        }
-        fields = [wanted.get(name, "") for name in header]
-        briefs = {}
-        for raw in table:
-            mapped = {
-                fields[index]: raw[index]
-                for index in range(min(len(fields), len(raw)))
-                if fields[index]
+        try:
+            sheet = workbook["Briefs - Internal (CF)"]
+            table = sheet.iter_rows(values_only=True)
+            header = [header_key(cell) for cell in next(table)]
+            wanted = {
+                "campaign": "campaign",
+                "campaign status": "status",
+                "brief": "brief",
+                "campaign owner": "owner",
             }
-            name = plain(mapped.get("campaign"))[:200]
-            if not name:
-                continue
-            briefs[name_key(name)] = {
-                "name": name,
-                "status": BRIEF_STATUS.get(status_key(mapped.get("status")), ""),
-                "brief": plain(mapped.get("brief")),
-                "owner": plain(mapped.get("owner"))[:150],
-            }
+            fields = [wanted.get(name, "") for name in header]
+            briefs = {}
+            for raw in table:
+                mapped = {
+                    fields[index]: raw[index]
+                    for index in range(min(len(fields), len(raw)))
+                    if fields[index]
+                }
+                name = plain(mapped.get("campaign"))[:200]
+                if not name:
+                    continue
+                briefs[name_key(name)] = {
+                    "name": name,
+                    "status": BRIEF_STATUS.get(status_key(mapped.get("status")))
+                    or map_campaign_status(mapped.get("status")),
+                    "brief": plain(mapped.get("brief")),
+                    "owner": plain(mapped.get("owner"))[:150],
+                }
+        finally:
+            workbook.close()
         return briefs
 
     def _users(self):
@@ -553,14 +532,18 @@ class Command(BaseCommand):
                 client_name=name,
                 campaign_owner=owner,
                 created_by=owner,
-                status=CampaignStatus.OUTREACH,
+                status=CampaignStatus.NOT_STARTED,
                 creators_needed=1,
             )
         return saved
 
+    def _touch_db(self):
+        close_old_connections()
+        connection.ensure_connection()
+
     def _creators(self, profiles, users):
         existing = {}
-        for creator in Creator.objects.all().only("id", "platform", "profile_link"):
+        for creator in Creator.objects.select_related("country", "language", "added_by"):
             link = canonical_link(creator.profile_link)
             if link:
                 existing[profile_key(creator.platform, link)] = creator
@@ -575,6 +558,7 @@ class Command(BaseCommand):
             if changed:
                 to_update.append(creator)
         created = []
+        self._touch_db()
         for start in range(0, len(to_create), 400):
             batch = to_create[start : start + 400]
             created.extend(
@@ -586,6 +570,7 @@ class Command(BaseCommand):
             link = canonical_link(creator.profile_link)
             existing[profile_key(creator.platform, link)] = creator
         if to_update:
+            self._touch_db()
             Creator.objects.bulk_update(
                 to_update,
                 [
@@ -617,8 +602,8 @@ class Command(BaseCommand):
             profile_link=profile["profile_link"],
             influencer_name=profile["name"],
             niche=profile["niche"],
-            country=lookup_named(Country, profile["country"]),
-            language=lookup_named(Language, profile["language"] or "English"),
+            country=self.countries.get(profile["country"]),
+            language=self.languages.get(profile["language"] or "English"),
             followers=profile["followers"],
             tier=profile["tier"],
             email=profile["email"],
@@ -648,9 +633,9 @@ class Command(BaseCommand):
         if profile["name"] and not profile["name"].startswith("http"):
             put("influencer_name", profile["name"])
         put("niche", profile["niche"])
-        put("country", lookup_named(Country, profile["country"]))
+        put("country", self.countries.get(profile["country"]))
         if profile["language"]:
-            put("language", lookup_named(Language, profile["language"]))
+            put("language", self.languages.get(profile["language"]))
         put("followers", profile["followers"])
         put("tier", profile["tier"])
         put("email", profile["email"])
@@ -725,30 +710,31 @@ class Command(BaseCommand):
                 ],
                 batch_size=400,
             )
-        for deal in line_deals:
-            replace_deliverable_lines(deal, deal._sheet_deliverables)
+        replace_deliverable_lines_bulk(
+            [(deal, deal._sheet_deliverables) for deal in line_deals]
+        )
         return created_count, len(to_update)
 
     def _brief_status_applies(self, current, incoming):
-        if incoming == CampaignStatus.CLOSED:
-            return current != CampaignStatus.CLOSED
-        if current in {CampaignStatus.CLOSED, CampaignStatus.CLIENT_SHARING}:
+        locked = {CampaignStatus.COMPLETED, CampaignStatus.CANCELLED}
+        if incoming in locked:
+            return current not in locked
+        if current in locked:
             return False
-        return incoming == CampaignStatus.OUTREACH and current == CampaignStatus.DRAFT
+        return current in {CampaignStatus.DRAFT, CampaignStatus.NOT_STARTED}
 
-    def _stage_moves_forward(self, current, incoming):
-        order = {
-            Stage.SHORTLISTED: 1,
-            Stage.CONTACTED: 2,
-            Stage.NEGOTIATING: 3,
-            Stage.CONFIRMED: 4,
-            Stage.SHARED: 5,
-        }
-        if incoming in {Stage.NOT_INTERESTED, Stage.UNRESPONSIVE}:
-            return current in {Stage.SHORTLISTED, Stage.CONTACTED, Stage.NEGOTIATING}
-        if current in {Stage.NOT_INTERESTED, Stage.UNRESPONSIVE, Stage.SHARED}:
-            return False
-        return order.get(incoming, 0) >= order.get(current, 0)
+    def _rates(self, deals, creators):
+        return ensure_rates(
+            [
+                (
+                    creators.get((platform, link)),
+                    row["deliverables"],
+                    row["price"],
+                    row["currency"],
+                )
+                for (platform, link, _campaign), row in deals.items()
+            ]
+        )
 
     def _new_deal(self, campaign, creator, row):
         return CampaignCreator(
@@ -778,7 +764,7 @@ class Command(BaseCommand):
                 setattr(deal, field, value)
                 changed = True
 
-        if self._stage_moves_forward(deal.stage, row["stage"]):
+        if row["stage"]:
             put("stage", row["stage"])
         put("fit_notes", row["comments"])
         put("deliverables_notes", row["deliverables_notes"])
@@ -787,7 +773,7 @@ class Command(BaseCommand):
         put("sent_date", row["sent_date"])
         put("date_confirmed", row["date_confirmed"])
         put("added_by", row["who"])
-        if row["price"] is not None:
+        if row["price"] is not None and deal.creator_price is None:
             put("creator_price", row["price"])
             put("creator_currency", row["currency"])
             put("creator_price_eur", row["price_eur"])
@@ -925,7 +911,13 @@ class Command(BaseCommand):
         existing_campaigns = {name_key(name) for name in Campaign.objects.values_list("client_name", flat=True)}
         new_creators = sum(1 for key in profiles if key not in existing_creators)
         new_campaigns = sum(1 for name in names if name_key(name) not in existing_campaigns)
+        priced = sum(
+            1
+            for row in deals.values()
+            if row["price"] is not None and row["currency"] and row["deliverables"]
+        )
         self.stdout.write(
             f"Dry run: {new_creators} new creators, {len(profiles) - new_creators} already stored, "
-            f"{new_campaigns} new campaigns, {len(deals)} deals."
+            f"{new_campaigns} new campaigns, {len(deals)} deals, "
+            f"{priced} rows with a rate to add if missing."
         )

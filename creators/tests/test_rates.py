@@ -6,6 +6,7 @@ from django.test import TestCase
 from creators.choices import Currency, Platform
 from creators.forms import CreatorRateForm
 from creators.models import Creator, CreatorRate, DeliverableType
+from creators.rates import ensure_rate, ensure_rates
 
 
 class CreatorRateBundleTests(TestCase):
@@ -78,3 +79,42 @@ class CreatorRateBundleTests(TestCase):
                 second.deliverables.set([self.post, self.story])
         first.refresh_from_db()
         self.assertEqual(first.price, Decimal("10.00"))
+
+    def test_ensure_rate_adds_a_missing_bundle(self):
+        added = ensure_rate(
+            self.creator, ["Rate Post", "Rate Story"], Decimal("15.00"), Currency.EUR
+        )
+        self.assertTrue(added)
+        self.assertEqual(self.creator.rates.count(), 1)
+
+    def test_ensure_rate_leaves_an_existing_price(self):
+        ensure_rate(self.creator, ["Rate Post"], Decimal("10.00"), Currency.EUR)
+        added = ensure_rate(self.creator, ["Rate Post"], Decimal("99.00"), Currency.EUR)
+        self.assertFalse(added)
+        self.assertEqual(self.creator.rates.get().price, Decimal("10.00"))
+
+    def test_ensure_rate_reuses_the_deliverable_master(self):
+        ensure_rate(self.creator, ["rate post"], Decimal("8.00"), Currency.EUR)
+        self.assertEqual(DeliverableType.objects.filter(name__iexact="rate post").count(), 1)
+        self.assertTrue(DeliverableType.objects.filter(name="Rate Post").exists())
+
+    def test_ensure_rates_writes_many_rows_in_one_pass(self):
+        other = Creator.objects.create(
+            platform=Platform.YOUTUBE,
+            profile_link="https://youtube.com/rates2",
+            influencer_name="Rates Two",
+        )
+        added = ensure_rates(
+            [
+                (self.creator, ["Rate Post"], Decimal("11.00"), Currency.EUR),
+                (other, ["Rate Story"], Decimal("12.00"), Currency.USD),
+                (self.creator, ["Rate Post"], Decimal("99.00"), Currency.EUR),
+            ]
+        )
+        self.assertEqual(added, 2)
+        self.assertEqual(CreatorRate.objects.count(), 2)
+        self.assertEqual(
+            self.creator.rates.get().price,
+            Decimal("11.00"),
+        )
+

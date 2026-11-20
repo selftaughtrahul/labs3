@@ -9,7 +9,7 @@ from __future__ import annotations
 import csv
 import re
 from collections import Counter, defaultdict
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -17,18 +17,20 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.management.base import BaseCommand, CommandError
 from django.core.validators import validate_email
-from django.db import transaction
+from django.db import close_old_connections, connection
 
-from campaigns.deliverables import replace_deliverable_lines
-from campaigns.models import Campaign, CampaignCreator, CampaignStatus, Stage
+from campaigns.deliverables import replace_deliverable_lines_bulk
+from campaigns.models import Campaign, CampaignCreator, CampaignStatus
+from campaigns.sheet_status import map_deal_stage
 from creators.choices import Currency, Platform, Tier
 from creators.lists import clean_string_list
-from creators.masters import lookup_named
+from creators.masters import MasterCache
 from creators.models import Country, Creator, Language
+from creators.profile_links import canonical_link, profile_key
+from creators.rates import ensure_rates
 
-DEFAULT_SHEET = Path(
-    r"C:\Users\rahul\Downloads\Awisee Main DataBase - Centralised Database.csv"
-)
+DEFAULT_SHEET = Path(r"C:\Users\rahul\Downloads\Awisee Main DataBase.xlsx")
+CENTRAL_TAB = "Centralised Database"
 DEFAULT_PASSWORD = "12345"
 SOURCE = "sheet"
 
@@ -58,11 +60,6 @@ CURRENCY_ALIASES = {
     "£": Currency.GBP,
     "$": Currency.USD,
     "€": Currency.EUR,
-}
-STAGE_ALIASES = {
-    "confirmed": Stage.CONFIRMED,
-    "negotiating": Stage.NEGOTIATING,
-    "sent": Stage.CONTACTED,
 }
 HEADER_ALIASES = {
     "Date Added\n(DD/MM/YYYY)": "date_added",
@@ -97,6 +94,10 @@ HEADER_ALIASES = {
     "Profile Checked": "profile_checked",
     "FX Lock Date": "fx_lock_date",
 }
+FOLDED_HEADERS = {
+    re.sub(r"[^a-z0-9]+", " ", key.lower()).strip(): value
+    for key, value in HEADER_ALIASES.items()
+}
 
 
 def username_from_name(name: str) -> str:
@@ -104,8 +105,29 @@ def username_from_name(name: str) -> str:
     return slug[:150] or "sheet"
 
 
+def sheet_text(value) -> str:
+    if value is None or value == "":
+        return ""
+    if isinstance(value, datetime):
+        return value.strftime("%d/%m/%Y")
+    if isinstance(value, date):
+        return value.strftime("%d/%m/%Y")
+    return " ".join(str(value).split())
+
+
+def header_field(name) -> str:
+    text = " ".join(str(name or "").split())
+    if text in HEADER_ALIASES:
+        return HEADER_ALIASES[text]
+    return FOLDED_HEADERS.get(re.sub(r"[^a-z0-9]+", " ", text.lower()).strip(), "")
+
+
+def name_key(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", (value or "").lower())
+
+
 def cell(row: dict, key: str) -> str:
-    return " ".join((row.get(key) or "").split())
+    return sheet_text(row.get(key))
 
 
 def parse_date(value: str):
@@ -177,10 +199,8 @@ def parse_currency(value: str):
 
 
 def parse_stage(value: str):
-    text = cell({"v": value}, "v").lower()
-    if not text:
-        return Stage.SHORTLISTED
-    return STAGE_ALIASES.get(text, Stage.SHORTLISTED)
+    stage, _outreach, _known = map_deal_stage(value)
+    return stage
 
 
 def parse_email(value: str) -> str:
@@ -195,12 +215,7 @@ def parse_email(value: str) -> str:
 
 
 def parse_url(value: str) -> str:
-    text = (value or "").strip()
-    if not text:
-        return ""
-    if not re.match(r"^https?://", text, re.I):
-        text = f"https://{text}"
-    return text[:500]
+    return canonical_link(value)
 
 
 def filled(value) -> bool:
@@ -261,7 +276,7 @@ def map_row(raw: dict) -> dict | None:
         "email": email,
         "other_contact": other_contact[:250],
         "email_outreached": cell(raw, "email_outreached")[:150],
-        "stage": parse_stage(raw.get("outreach_status", "")),
+        "stage": parse_stage(sheet_text(raw.get("outreach_status", ""))),
         "sent_date": parse_date(raw.get("sent_date", "")),
         "date_confirmed": parse_date(raw.get("date_confirmed", "")),
         "comments": (raw.get("comments") or "").strip(),
@@ -338,7 +353,7 @@ def merge_profile(current: dict | None, row: dict) -> dict:
 
 
 class Command(BaseCommand):
-    help = "Import Awisee Main DataBase - Centralised Database.csv"
+    help = "Import Centralised Database from Awisee Main DataBase.xlsx"
 
     def add_arguments(self, parser):
         parser.add_argument("path", nargs="?", default=str(DEFAULT_SHEET))
@@ -357,67 +372,106 @@ class Command(BaseCommand):
             f"deals {len(deals)} after collapsing duplicates."
         )
         if options["dry_run"]:
+            self._preview(profiles, deals, campaign_owners)
             return
 
-        with transaction.atomic():
-            users = self._ensure_users(names)
-            campaign_map = self._save_campaigns(campaign_owners, users)
-            creator_map = self._save_creators(profiles, users)
-            created_deals = self._save_deals(deals, campaign_map, creator_map)
-            self._set_creators_needed(campaign_map)
+        self._touch_db()
+        self.countries = MasterCache(Country)
+        self.languages = MasterCache(Language)
+        self.countries.ensure(profile["country"] for profile in profiles.values())
+        self.languages.ensure(
+            [profile["language"] for profile in profiles.values()] + ["English"]
+        )
+        self.stdout.write("Masters loaded.")
+        self._touch_db()
+        users = self._ensure_users(names)
+        campaign_map = self._save_campaigns(campaign_owners, users)
+        self.stdout.write(f"Campaigns ready ({len(campaign_map)}).")
+        self._touch_db()
+        creator_map = self._save_creators(profiles, users)
+        self.stdout.write(f"Creators stored ({len(creator_map)}).")
+        self._touch_db()
+        created_deals = self._save_deals(deals, campaign_map, creator_map)
+        self.stdout.write(f"Deals stored ({created_deals}).")
+        self._touch_db()
+        created_rates = self._save_rates(deals, creator_map)
+        self.stdout.write(f"Rates +{created_rates}.")
+        self._set_creators_needed(campaign_map)
 
         staff_count = len({user.pk for user in users.values()})
         self.stdout.write(
             self.style.SUCCESS(
                 f"Imported {staff_count} staff users, {len(creator_map)} creators, "
-                f"{len(campaign_map)} campaigns, {created_deals} deals."
+                f"{len(campaign_map)} campaigns, {created_deals} deals, "
+                f"{created_rates} rates."
             )
         )
 
     def _read_sheet(self, path: Path) -> tuple[list[dict], int]:
+        if path.suffix.lower() == ".csv":
+            with path.open(newline="", encoding="utf-8-sig") as handle:
+                table = list(csv.reader(handle))
+        else:
+            table = self._xlsx_rows(path)
+        if not table:
+            return [], 0
+        keys = [header_field(name) for name in table[0]]
         rows = []
         skipped = 0
-        with path.open(newline="", encoding="utf-8-sig") as handle:
-            reader = csv.reader(handle)
-            header = next(reader)
-            keys = [HEADER_ALIASES.get(name, "") for name in header]
-            for raw in reader:
-                mapped = {
-                    keys[index]: raw[index]
-                    for index in range(min(len(keys), len(raw)))
-                    if keys[index]
-                }
-                if (mapped.get("profile_link") or "").upper().startswith("DO NOT DELETE"):
-                    skipped += 1
-                    continue
-                parsed = map_row(mapped)
-                if parsed is None:
-                    skipped += 1
-                    continue
-                rows.append(parsed)
+        for raw in table[1:]:
+            mapped = {
+                keys[index]: sheet_text(raw[index])
+                for index in range(min(len(keys), len(raw)))
+                if keys[index]
+            }
+            link = mapped.get("profile_link") or ""
+            if "DO NOT DELETE" in link.upper() or "do not add" in link.lower():
+                skipped += 1
+                continue
+            parsed = map_row(mapped)
+            if parsed is None:
+                skipped += 1
+                continue
+            rows.append(parsed)
         return rows, skipped
+
+    def _xlsx_rows(self, path: Path):
+        import openpyxl
+
+        workbook = openpyxl.load_workbook(path, read_only=True, data_only=True)
+        try:
+            if CENTRAL_TAB not in workbook.sheetnames:
+                raise CommandError(f"Tab {CENTRAL_TAB} not found in {path}")
+            return [list(row) for row in workbook[CENTRAL_TAB].iter_rows(values_only=True)]
+        finally:
+            workbook.close()
 
     def _collapse(self, rows: list[dict]):
         profiles = {}
         deals = {}
         owners = defaultdict(list)
         names = Counter()
+        campaign_labels = {}
         for row in rows:
             who = row["who_added"]
             if who:
                 names[who] += 1
-            key = (row["platform"], row["profile_link"])
+            key = profile_key(row["platform"], row["profile_link"])
             profiles[key] = merge_profile(profiles.get(key), row)
             campaign = row["campaign"]
             if not campaign:
                 continue
-            owners[campaign].append(who)
-            deals[(row["platform"], row["profile_link"], campaign)] = row
+            campaign_key = name_key(campaign)
+            campaign_labels[campaign_key] = campaign
+            owners[campaign_key].append(who)
+            deals[(key[0], key[1], campaign_key)] = row
         campaign_owners = {
-            campaign: Counter([name for name in people if name]).most_common(1)[0][0]
+            campaign_labels[campaign_key]: Counter(
+                [name for name in people if name]
+            ).most_common(1)[0][0]
             if any(people)
             else ""
-            for campaign, people in owners.items()
+            for campaign_key, people in owners.items()
         }
         return profiles, deals, campaign_owners, names
 
@@ -443,117 +497,282 @@ class Command(BaseCommand):
             users[username] = user
         return users
 
+    def _touch_db(self):
+        close_old_connections()
+        connection.ensure_connection()
+
     def _save_campaigns(self, campaign_owners: dict, users: dict) -> dict:
         fallback = users["sheet"]
+        existing = {name_key(item.client_name): item for item in Campaign.objects.all()}
         saved = {}
         for name, owner_name in sorted(campaign_owners.items()):
+            key = name_key(name)
             owner = users.get(owner_name, fallback)
-            campaign, created = Campaign.objects.get_or_create(
-                client_name=name,
-                defaults={
-                    "campaign_owner": owner,
-                    "created_by": owner,
-                    "status": CampaignStatus.OUTREACH,
-                    "creators_needed": 1,
-                },
-            )
-            if not created and not campaign.campaign_owner_id:
+            campaign = existing.get(key)
+            if campaign is None:
+                campaign = Campaign.objects.create(
+                    client_name=name,
+                    campaign_owner=owner,
+                    created_by=owner,
+                    status=CampaignStatus.NOT_STARTED,
+                    creators_needed=1,
+                )
+                existing[key] = campaign
+            elif not campaign.campaign_owner_id:
                 campaign.campaign_owner = owner
                 campaign.save(update_fields=["campaign_owner"])
-            saved[name] = campaign
+            saved[key] = campaign
         return saved
 
     def _save_creators(self, profiles: dict, users: dict) -> dict:
         fallback = users["sheet"]
-        saved = {}
+        existing = {}
+        for creator in Creator.objects.select_related("country", "language", "added_by"):
+            link = canonical_link(creator.profile_link)
+            if link:
+                existing[profile_key(creator.platform, link)] = creator
+        to_create = []
+        to_update = []
+        saved = dict(existing)
         for key, profile in profiles.items():
             added_by = users.get(profile["who_added"], fallback) if profile["who_added"] else fallback
-            creator, created = Creator.objects.get_or_create(
-                platform=profile["platform"],
-                profile_link=profile["profile_link"],
-                defaults={
-                    "influencer_name": profile["influencer_name"],
-                    "niche": profile["niche"],
-                    "country": lookup_named(Country, profile["country"]),
-                    "language": lookup_named(Language, profile["language"] or "English"),
-                    "followers": profile["followers"],
-                    "tier": profile["tier"],
-                    "email": profile["email"],
-                    "other_contact": profile["other_contact"],
-                    "engagement_rate": profile["engagement_rate"],
-                    "audience_insights": profile["audience_insights"],
-                    "avg_views": profile["avg_views"],
-                    "geo": profile["geo"],
-                    "female_pct": profile["female_pct"],
-                    "male_pct": profile["male_pct"],
-                    "is_profile_checked": bool(profile["profile_checked"]),
-                    "source": SOURCE,
-                    "added_by": added_by,
-                    "added_at": profile["added_at"],
-                },
-            )
-            if not created:
-                creator.influencer_name = profile["influencer_name"]
-                creator.niche = profile["niche"]
-                creator.country = lookup_named(Country, profile["country"])
-                if profile["language"]:
-                    creator.language = lookup_named(Language, profile["language"])
-                creator.followers = profile["followers"]
-                creator.tier = profile["tier"]
-                creator.email = profile["email"]
-                creator.other_contact = profile["other_contact"]
-                creator.engagement_rate = profile["engagement_rate"]
-                creator.audience_insights = profile["audience_insights"]
-                creator.avg_views = profile["avg_views"]
-                creator.geo = profile["geo"]
-                creator.female_pct = profile["female_pct"]
-                creator.male_pct = profile["male_pct"]
-                creator.is_profile_checked = bool(profile["profile_checked"])
-                creator.source = SOURCE
-                creator.added_by = added_by
-                creator.added_at = profile["added_at"]
-                creator.save()
+            creator = existing.get(key)
+            if creator is None:
+                to_create.append(self._new_creator(profile, added_by))
+                continue
+            if self._fill_creator(creator, profile, added_by):
+                to_update.append(creator)
             saved[key] = creator
+        for start in range(0, len(to_create), 400):
+            batch = to_create[start : start + 400]
+            Creator.objects.bulk_create(batch)
+            for creator in batch:
+                saved[profile_key(creator.platform, creator.profile_link)] = creator
+        if to_update:
+            Creator.objects.bulk_update(
+                to_update,
+                [
+                    "influencer_name",
+                    "niche",
+                    "country",
+                    "language",
+                    "followers",
+                    "tier",
+                    "email",
+                    "other_contact",
+                    "engagement_rate",
+                    "audience_insights",
+                    "avg_views",
+                    "geo",
+                    "female_pct",
+                    "male_pct",
+                    "is_profile_checked",
+                    "source",
+                    "added_by",
+                    "added_at",
+                ],
+                batch_size=400,
+            )
         return saved
 
+    def _new_creator(self, profile, added_by):
+        return Creator(
+            platform=profile["platform"],
+            profile_link=profile["profile_link"],
+            influencer_name=profile["influencer_name"],
+            niche=profile["niche"],
+            country=self.countries.get(profile["country"]),
+            language=self.languages.get(profile["language"] or "English"),
+            followers=profile["followers"],
+            tier=profile["tier"],
+            email=profile["email"],
+            other_contact=profile["other_contact"],
+            engagement_rate=profile["engagement_rate"],
+            audience_insights=profile["audience_insights"],
+            avg_views=profile["avg_views"],
+            geo=profile["geo"],
+            female_pct=profile["female_pct"],
+            male_pct=profile["male_pct"],
+            is_profile_checked=bool(profile["profile_checked"]),
+            source=SOURCE,
+            added_by=added_by,
+            added_at=profile["added_at"],
+        )
+
+    def _fill_creator(self, creator, profile, added_by):
+        changed = False
+
+        def put(field, value):
+            nonlocal changed
+            if not filled(value):
+                return
+            if getattr(creator, field) != value:
+                setattr(creator, field, value)
+                changed = True
+
+        put("influencer_name", profile["influencer_name"])
+        put("niche", profile["niche"])
+        put("country", self.countries.get(profile["country"]))
+        if profile["language"]:
+            put("language", self.languages.get(profile["language"]))
+        put("followers", profile["followers"])
+        put("tier", profile["tier"])
+        put("email", profile["email"])
+        put("other_contact", profile["other_contact"])
+        put("engagement_rate", profile["engagement_rate"])
+        put("audience_insights", profile["audience_insights"])
+        put("avg_views", profile["avg_views"])
+        put("geo", profile["geo"])
+        put("female_pct", profile["female_pct"])
+        put("male_pct", profile["male_pct"])
+        if profile["profile_checked"]:
+            put("is_profile_checked", True)
+        if not creator.source:
+            put("source", SOURCE)
+        if creator.added_by_id is None:
+            put("added_by", added_by)
+        put("added_at", profile["added_at"])
+        return changed
+
     def _save_deals(self, deals: dict, campaigns: dict, creators: dict) -> int:
-        count = 0
-        for (platform, link, campaign_name), row in deals.items():
-            campaign = campaigns[campaign_name]
+        existing = {
+            (deal.campaign_id, deal.creator_id): deal
+            for deal in CampaignCreator.objects.all()
+        }
+        to_create = []
+        to_update = []
+        line_deals = []
+        for (platform, link, campaign_key), row in deals.items():
+            campaign = campaigns[campaign_key]
             creator = creators[(platform, link)]
             price, currency, price_eur = normalize_budget(
                 row["price"], row["currency"], row["price_eur"]
             )
-            defaults = {
-                "stage": row["stage"],
-                "deliverables_notes": row["deliverables_notes"],
-                "assigned_to": row["who_added"],
-                "email_outreached": row["email_outreached"],
-                "sent_date": row["sent_date"],
-                "fx_lock_date": row["fx_lock_date"],
-                "creator_price": price,
-                "creator_currency": currency,
-                "creator_price_eur": price_eur if currency else None,
-                "date_confirmed": row["date_confirmed"],
-                "client_remarks": row["comments"],
-                "added_by": row["who_added"],
-            }
-            deal, created = CampaignCreator.objects.get_or_create(
-                campaign=campaign,
-                creator=creator,
-                defaults=defaults,
+            current = existing.get((campaign.id, creator.id))
+            if current is None:
+                deal = CampaignCreator(
+                    campaign=campaign,
+                    creator=creator,
+                    stage=row["stage"],
+                    deliverables_notes=row["deliverables_notes"],
+                    assigned_to=row["who_added"],
+                    email_outreached=row["email_outreached"],
+                    sent_date=row["sent_date"],
+                    fx_lock_date=row["fx_lock_date"],
+                    creator_price=price,
+                    creator_currency=currency,
+                    creator_price_eur=price_eur if currency else None,
+                    date_confirmed=row["date_confirmed"],
+                    client_remarks=row["comments"],
+                    added_by=row["who_added"],
+                )
+                to_create.append(deal)
+                if row["deliverables"]:
+                    deal._sheet_deliverables = row["deliverables"]
+                    line_deals.append(deal)
+                continue
+            changed = False
+            if row["stage"] and current.stage != row["stage"]:
+                current.stage = row["stage"]
+                changed = True
+            if row["deliverables_notes"] and not current.deliverables_notes:
+                current.deliverables_notes = row["deliverables_notes"]
+                changed = True
+            if row["who_added"]:
+                current.assigned_to = row["who_added"]
+                current.added_by = row["who_added"]
+                changed = True
+            if row["email_outreached"] and not current.email_outreached:
+                current.email_outreached = row["email_outreached"]
+                changed = True
+            if row["sent_date"] and not current.sent_date:
+                current.sent_date = row["sent_date"]
+                changed = True
+            if row["fx_lock_date"] and not current.fx_lock_date:
+                current.fx_lock_date = row["fx_lock_date"]
+                changed = True
+            if row["date_confirmed"] and not current.date_confirmed:
+                current.date_confirmed = row["date_confirmed"]
+                changed = True
+            if row["comments"] and not current.client_remarks:
+                current.client_remarks = row["comments"]
+                changed = True
+            if current.creator_price is None and price is not None:
+                current.creator_price = price
+                current.creator_currency = currency
+                current.creator_price_eur = price_eur if currency else None
+                changed = True
+            if current.creator_price_eur is None or current.client_price_eur is None:
+                if current.margin_eur is not None:
+                    current.margin_eur = None
+                    changed = True
+            else:
+                margin = current.client_price_eur - current.creator_price_eur
+                if current.margin_eur != margin:
+                    current.margin_eur = margin
+                    changed = True
+            if changed:
+                to_update.append(current)
+            if row["deliverables"]:
+                current._sheet_deliverables = row["deliverables"]
+                line_deals.append(current)
+        for start in range(0, len(to_create), 400):
+            CampaignCreator.objects.bulk_create(to_create[start : start + 400])
+        if to_update:
+            CampaignCreator.objects.bulk_update(
+                to_update,
+                [
+                    "stage",
+                    "deliverables_notes",
+                    "assigned_to",
+                    "email_outreached",
+                    "sent_date",
+                    "fx_lock_date",
+                    "creator_price",
+                    "creator_currency",
+                    "creator_price_eur",
+                    "date_confirmed",
+                    "client_remarks",
+                    "added_by",
+                    "margin_eur",
+                ],
+                batch_size=400,
             )
-            if not created:
-                for field, value in defaults.items():
-                    setattr(deal, field, value)
-                if deal.creator_price_eur is None or deal.client_price_eur is None:
-                    deal.margin_eur = None
-                else:
-                    deal.margin_eur = deal.client_price_eur - deal.creator_price_eur
-                deal.save()
-            replace_deliverable_lines(deal, row["deliverables"])
-            count += 1
-        return count
+        replace_deliverable_lines_bulk(
+            [(deal, deal._sheet_deliverables) for deal in line_deals]
+        )
+        return len(to_create) + len(to_update)
+
+    def _save_rates(self, deals, creators):
+        rows = []
+        for (platform, link, _campaign), row in deals.items():
+            price, currency, _eur = normalize_budget(
+                row["price"], row["currency"], row["price_eur"]
+            )
+            rows.append(
+                (creators.get((platform, link)), row["deliverables"], price, currency)
+            )
+        return ensure_rates(rows)
+
+    def _preview(self, profiles, deals, campaign_owners):
+        existing_creators = {
+            profile_key(creator.platform, canonical_link(creator.profile_link))
+            for creator in Creator.objects.all().only("platform", "profile_link")
+            if canonical_link(creator.profile_link)
+        }
+        existing_campaigns = {
+            name_key(name) for name in Campaign.objects.values_list("client_name", flat=True)
+        }
+        new_creators = sum(1 for key in profiles if key not in existing_creators)
+        new_campaigns = sum(
+            1 for name in campaign_owners if name_key(name) not in existing_campaigns
+        )
+        priced = sum(1 for row in deals.values() if row["price"] and row["deliverables"])
+        self.stdout.write(
+            f"Dry run: {new_creators} new creators, {len(profiles) - new_creators} already stored, "
+            f"{new_campaigns} new campaigns, {len(deals)} deals, "
+            f"{priced} rows with a rate to add if missing."
+        )
 
     def _set_creators_needed(self, campaigns: dict):
         for campaign in campaigns.values():

@@ -45,3 +45,35 @@ def lookup_named(model, name):
     if existing:
         return existing
     return model.objects.create(name=text)
+
+
+class MasterCache:
+    """Load a named master once, then resolve sheet values without extra queries."""
+
+    def __init__(self, model):
+        self.model = model
+        self.by_key = {fold_key(obj.name): obj for obj in model.objects.all()}
+
+    def get(self, name):
+        text = folded(name)[:120]
+        if not text:
+            return None
+        return self.by_key.get(fold_key(text))
+
+    def ensure(self, names):
+        missing = []
+        seen = set()
+        for name in names:
+            text = folded(name)[:120]
+            if not text:
+                continue
+            key = fold_key(text)
+            if key in self.by_key or key in seen:
+                continue
+            seen.add(key)
+            missing.append(self.model(name=text))
+        if missing:
+            self.model.objects.bulk_create(missing, batch_size=400)
+            self.by_key = {fold_key(obj.name): obj for obj in self.model.objects.all()}
+        return self
+
