@@ -123,25 +123,28 @@ class CampaignImportMergeTests(TestCase):
         self.assertEqual(campaign.client_name, "Bixberry")
         self.assertEqual(campaign.status, CampaignStatus.ACTIVE)
         self.assertEqual(campaign.creators_needed, 5)
-        self.assertEqual(campaign.team_lead, "Andrea")
+        self.assertEqual(campaign.campaign_owner.username, "andrea")
+        self.assertEqual(campaign.created_by, campaign.campaign_owner)
         self.assertEqual(campaign.client_poc_name, "Emilija")
-        self.assertEqual(campaign.poc, "Andrea")
-        self.assertEqual(campaign.second_poc, "Patrick")
-        self.assertEqual(campaign.scouting_team, "Udaya, Patrick")
+        self.assertEqual(
+            set(campaign.poc.values_list("username", flat=True)),
+            {"andrea", "patrick"},
+        )
+        self.assertEqual(
+            set(campaign.scouting_team.values_list("username", flat=True)),
+            {"udaya", "patrick"},
+        )
         self.assertEqual(campaign.start_date, date(2026, 9, 16))
         self.assertIsNone(campaign.deadline)
         self.assertEqual(campaign.deadline_to_scout, date(2026, 10, 23))
         self.assertEqual(campaign.budget_amount, Decimal("10000"))
         self.assertEqual(campaign.budget_currency, "USD")
         self.assertEqual(campaign.budget_eur, Decimal("9094.5"))
-        self.assertEqual(campaign.notes, "Scouting started")
-        self.assertEqual(campaign.working_sheet, "Bixberry working file")
-        self.assertEqual(campaign.cf_list, "Bixberry CF")
-        self.assertTrue(campaign.priority)
-        self.assertTrue(campaign.list_submitted)
-        self.assertTrue(campaign.ready_for_dev)
-        self.assertEqual(campaign.age_range, "25-34")
-        self.assertEqual(campaign.view_consistency, "Consistent")
+        self.assertIn("Scouting started", campaign.notes)
+        self.assertIn("Bixberry working file", campaign.notes)
+        self.assertIn("Bixberry CF", campaign.notes)
+        self.assertIn("25-34", campaign.remarks_brief)
+        self.assertIn("Consistent", campaign.remarks_brief)
         self.assertEqual(campaign.platforms, [Platform.INSTAGRAM])
         self.assertEqual(campaign.min_followers, 50000)
         self.assertEqual(list(campaign.country_market.values_list("name", flat=True)), ["Germany"])
@@ -171,7 +174,7 @@ class CampaignImportMergeTests(TestCase):
             campaign_owner=self.owner,
             notes="Already stored",
             creators_needed=7,
-            status=CampaignStatus.SCOUTING,
+            status=CampaignStatus.ACTIVE,
         )
         row = master_from_values(
             MASTER_HEADER,
@@ -181,5 +184,5 @@ class CampaignImportMergeTests(TestCase):
         campaign.refresh_from_db()
         self.assertEqual(campaign.notes, "Already stored")
         self.assertEqual(campaign.creators_needed, 7)
-        self.assertEqual(campaign.status, CampaignStatus.SCOUTING)
-        self.assertEqual(campaign.team_lead, "Andrea")
+        self.assertEqual(campaign.status, CampaignStatus.ACTIVE)
+        self.assertEqual(campaign.campaign_owner.username, "andrea")

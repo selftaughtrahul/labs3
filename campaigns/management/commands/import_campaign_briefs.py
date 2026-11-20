@@ -14,6 +14,7 @@ from django.db import transaction
 
 from campaigns.models import Campaign, CampaignStatus
 from creators.choices import Currency, Platform
+from creators.management.commands.import_central_sheet import username_from_name
 from creators.masters import lookup_named
 from creators.models import Country
 
@@ -29,30 +30,42 @@ SHEET_USERNAME = "sheet"
 
 BRIEF_STATUS_ALIASES = {
     "new request": CampaignStatus.DRAFT,
-    "in progress": CampaignStatus.SCOUTING,
-    "pitch": CampaignStatus.OUTREACH,
-    "scouting": CampaignStatus.SCOUTING,
-    "ready for review": CampaignStatus.CLIENT_SHARING,
-    "delivered": CampaignStatus.CLOSED,
+    "draft": CampaignStatus.DRAFT,
+    "in progress": CampaignStatus.ACTIVE,
+    "pitch": CampaignStatus.ACTIVE,
+    "scouting": CampaignStatus.ACTIVE,
+    "active": CampaignStatus.ACTIVE,
+    "ready for review": CampaignStatus.PENDING,
+    "pending": CampaignStatus.PENDING,
+    "delivered": CampaignStatus.COMPLETED,
+    "completed": CampaignStatus.COMPLETED,
     "on hold": CampaignStatus.ON_HOLD,
     "cancelled": CampaignStatus.CANCELLED,
     "canceled": CampaignStatus.CANCELLED,
-    "completed": CampaignStatus.CLOSED,
+    "not started": CampaignStatus.NOT_STARTED,
+    "paused": CampaignStatus.PAUSED,
 }
 MASTER_STATUS_ALIASES = {
     "active": CampaignStatus.ACTIVE,
+    "draft": CampaignStatus.DRAFT,
+    "pending": CampaignStatus.PENDING,
     "pre-campaign": CampaignStatus.PRE_CAMPAIGN,
     "pre campaign": CampaignStatus.PRE_CAMPAIGN,
     "pre- campaign": CampaignStatus.PRE_CAMPAIGN,
-    "scouting": CampaignStatus.SCOUTING,
-    "outreach": CampaignStatus.OUTREACH,
+    "scouting": CampaignStatus.ACTIVE,
+    "outreach": CampaignStatus.ACTIVE,
     "awaiting payment": CampaignStatus.AWAITING_PAYMENT,
     "on hold": CampaignStatus.ON_HOLD,
     "unresponsive": CampaignStatus.UNRESPONSIVE,
     "cancelled": CampaignStatus.CANCELLED,
     "canceled": CampaignStatus.CANCELLED,
-    "completed": CampaignStatus.CLOSED,
-    "closed": CampaignStatus.CLOSED,
+    "completed": CampaignStatus.COMPLETED,
+    "closed": CampaignStatus.COMPLETED,
+    "not started": CampaignStatus.NOT_STARTED,
+    "paused": CampaignStatus.PAUSED,
+    "prospecting paused": CampaignStatus.PROSPECTING_PAUSED,
+    "contract pending": CampaignStatus.CONTRACT_PHASE,
+    "contract phase": CampaignStatus.CONTRACT_PHASE,
 }
 PLATFORM_WORDS = (
     ("instagram", Platform.INSTAGRAM),
@@ -123,6 +136,7 @@ MASTER_HEADER_KEYS = {
     "campaign status": "status",
     "last update date (dd/mm/yyyy)": "last_update_on",
     "notes": "notes",
+    "blockers": "blockers",
     "internal working sheet": "working_sheet",
     "cf list": "cf_list",
 }
@@ -148,13 +162,14 @@ EXTRA_REMARK_FIELDS = (
     "keywords",
     "suggested_profiles",
     "comments",
+    "priority",
+    "list_submitted",
+    "ready",
+    "age_range",
+    "view_consistency",
 )
-TRACKER_FIELDS = (
+SCALAR_FIELDS = (
     "client_poc_name",
-    "team_lead",
-    "poc",
-    "second_poc",
-    "scouting_team",
     "start_date",
     "deadline",
     "last_update_on",
@@ -162,10 +177,6 @@ TRACKER_FIELDS = (
     "budget_currency",
     "budget_eur",
     "notes",
-    "working_sheet",
-    "cf_list",
-)
-BRIEF_FIELDS = (
     "deadline_to_scout",
     "platforms",
     "niche_vertical",
@@ -177,11 +188,6 @@ BRIEF_FIELDS = (
     "min_avg_views",
     "min_engagement_rate",
     "remarks_brief",
-    "priority",
-    "list_submitted",
-    "ready_for_dev",
-    "age_range",
-    "view_consistency",
 )
 
 
@@ -341,6 +347,35 @@ def is_example(client: str) -> bool:
     return "example" in lowered or "not correct details" in lowered
 
 
+def split_people(value) -> list[str]:
+    raw = text(value)
+    if not raw or is_blank(raw):
+        return []
+    names = []
+    for part in re.split(r",|/|\band\b", raw, flags=re.I):
+        name = " ".join(part.split()).strip(" .")
+        if name and not is_blank(name) and name not in names:
+            names.append(name[:150])
+    return names
+
+
+def tracker_notes(mapped: dict) -> str:
+    blocks = []
+    notes = text(mapped.get("notes"))
+    if notes:
+        blocks.append(notes)
+    blockers = text(mapped.get("blockers"))
+    if blockers:
+        blocks.append(f"Blockers: {blockers}")
+    working_sheet = text(mapped.get("working_sheet"))
+    if working_sheet:
+        blocks.append(f"Working sheet: {working_sheet}")
+    cf_list = text(mapped.get("cf_list"))
+    if cf_list:
+        blocks.append(f"CF list: {cf_list}")
+    return "\n\n".join(blocks)
+
+
 def remarks_from(row: dict, extra_markets: list[str]) -> str:
     blocks = []
     if extra_markets:
@@ -391,11 +426,6 @@ def brief_from_values(header, values) -> dict | None:
         ),
         "status": parse_status(mapped.get("status"), BRIEF_STATUS_ALIASES),
         "remarks_brief": remarks_from(mapped, extra_markets),
-        "priority": parse_bool(mapped.get("priority")),
-        "list_submitted": parse_bool(mapped.get("list_submitted")),
-        "ready_for_dev": parse_bool(mapped.get("ready")),
-        "age_range": text(mapped.get("age_range"))[:80],
-        "view_consistency": text(mapped.get("view_consistency"))[:80],
         "status_from_master": False,
     }
 
@@ -409,9 +439,12 @@ def master_from_values(header, values) -> dict | None:
         "client_name": client[:200],
         "client_poc_name": text(mapped.get("client_poc_name"))[:150],
         "team_lead": text(mapped.get("team_lead"))[:150],
-        "poc": text(mapped.get("poc"))[:150],
-        "second_poc": text(mapped.get("second_poc"))[:150],
-        "scouting_team": text(mapped.get("scouting_team"))[:250],
+        "poc_names": split_people(mapped.get("poc")) + [
+            name
+            for name in split_people(mapped.get("second_poc"))
+            if name not in split_people(mapped.get("poc"))
+        ],
+        "scouting_names": split_people(mapped.get("scouting_team")),
         "start_date": parse_date(mapped.get("start_date")),
         "deadline": parse_date(mapped.get("deadline")),
         "budget_amount": parse_decimal(mapped.get("budget_amount")),
@@ -420,9 +453,7 @@ def master_from_values(header, values) -> dict | None:
         "creators_needed": parse_int(mapped.get("creators_needed")),
         "status": parse_status(mapped.get("status"), MASTER_STATUS_ALIASES),
         "last_update_on": parse_date(mapped.get("last_update_on")),
-        "notes": text(mapped.get("notes")),
-        "working_sheet": text(mapped.get("working_sheet"))[:250],
-        "cf_list": text(mapped.get("cf_list"))[:250],
+        "notes": tracker_notes(mapped),
         "status_from_master": True,
     }
 
@@ -459,8 +490,8 @@ def read_brief_xlsx(path: Path) -> list[dict]:
     workbook = load_workbook(path, data_only=True)
     rows = []
     sheets = (
-        ("Campaign Requirements", 3, CampaignStatus.SCOUTING),
-        ("Completed Campaigns", 2, CampaignStatus.CLOSED),
+        ("Campaign Requirements", 3, CampaignStatus.ACTIVE),
+        ("Completed Campaigns", 2, CampaignStatus.COMPLETED),
     )
     for sheet_name, header_row, default_status in sheets:
         if sheet_name not in workbook.sheetnames:
@@ -535,7 +566,7 @@ def collect_from_path(path: Path) -> tuple[list[dict], list[dict]]:
         if "Campaign Master" in names:
             return [], read_campaign_master(path)
         return read_brief_xlsx(path), []
-    return read_brief_csv(path, CampaignStatus.SCOUTING), []
+    return read_brief_csv(path, CampaignStatus.ACTIVE), []
 
 
 class Command(BaseCommand):
@@ -577,8 +608,8 @@ class Command(BaseCommand):
 
         owner = self._sheet_user()
         created = updated = 0
-        with transaction.atomic():
-            for row in store.values():
+        for row in store.values():
+            with transaction.atomic():
                 if self._save_campaign(row, owner):
                     created += 1
                 else:
@@ -621,6 +652,62 @@ class Command(BaseCommand):
                 countries.append(country)
         campaign.country_market.set(countries)
 
+    def _person(self, name: str):
+        cleaned_name = " ".join((name or "").split())
+        if not cleaned_name:
+            return None
+        cache = getattr(self, "_people", None)
+        if cache is None:
+            cache = {}
+            self._people = cache
+        key = cleaned_name.casefold()
+        if key in cache:
+            return cache[key]
+        User = get_user_model()
+        slug = username_from_name(cleaned_name)
+        user = User.objects.filter(username__iexact=slug).first()
+        if user is None:
+            matches = []
+            for candidate in User.objects.all():
+                label = " ".join(
+                    part for part in (candidate.first_name, candidate.last_name) if part
+                ).casefold()
+                if label == key or candidate.get_full_name().casefold() == key:
+                    matches.append(candidate)
+            if len(matches) == 1:
+                user = matches[0]
+        if user is None and " " not in cleaned_name:
+            by_first = list(User.objects.filter(first_name__iexact=cleaned_name))
+            if len(by_first) == 1:
+                user = by_first[0]
+        if user is None:
+            parts = cleaned_name.split()
+            user = User(username=slug, first_name=parts[0][:150], last_name=" ".join(parts[1:])[:150], is_staff=True, is_active=True)
+            user.set_unusable_password()
+            user.save()
+        cache[key] = user
+        return user
+
+    def _set_people(self, campaign, row: dict, fallback, created: bool):
+        lead_name = row.get("team_lead") or ""
+        lead = self._person(lead_name) if lead_name else None
+        if lead is not None:
+            campaign.campaign_owner = lead
+            if created or campaign.created_by_id in (None, fallback.id):
+                campaign.created_by = lead
+        elif campaign.campaign_owner_id is None:
+            campaign.campaign_owner = fallback
+            campaign.created_by = fallback
+        campaign.save()
+        poc_names = row.get("poc_names") or []
+        scout_names = row.get("scouting_names") or []
+        if poc_names:
+            campaign.poc.set(person for name in poc_names if (person := self._person(name)))
+        if scout_names:
+            campaign.scouting_team.set(
+                person for name in scout_names if (person := self._person(name))
+            )
+
     def _save_campaign(self, row: dict, owner) -> bool:
         campaign = Campaign.objects.filter(client_name__iexact=row["client_name"]).first()
         created = campaign is None
@@ -633,7 +720,7 @@ class Command(BaseCommand):
                 creators_needed=row.get("creators_needed") or 10,
             )
         self._apply(campaign, row)
-        campaign.save()
+        self._set_people(campaign, row, owner, created)
         self._set_markets(campaign, row.get("country_market") or [])
         return created
 
@@ -642,8 +729,14 @@ class Command(BaseCommand):
             campaign.status = row["status"]
         if row.get("creators_needed"):
             campaign.creators_needed = row["creators_needed"]
-        for name in BRIEF_FIELDS + TRACKER_FIELDS:
+        for name in SCALAR_FIELDS:
             value = row.get(name)
             if value in (None, "", []):
                 continue
+            if name == "budget_currency" and row.get("budget_amount") in (None, ""):
+                continue
             setattr(campaign, name, value)
+        if campaign.budget_amount is None:
+            campaign.budget_currency = ""
+        elif campaign.budget_currency == Currency.EUR and campaign.budget_eur is None:
+            campaign.budget_eur = campaign.budget_amount

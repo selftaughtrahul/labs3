@@ -1,6 +1,8 @@
 from django.contrib import admin
 from django.db.models import Count
 from django.forms.models import BaseInlineFormSet
+from django.urls import reverse
+from django.utils.html import format_html
 
 from .forms import (
     CampaignAdminForm,
@@ -31,20 +33,6 @@ class DealInline(admin.TabularInline):
     show_change_link = True
     readonly_fields = ("margin_eur",)
     ordering = ("-updated_at",)
-
-
-class CampaignDealInline(DealInline):
-    autocomplete_fields = ("creator",)
-    fields = (
-        "creator",
-        "stage",
-        "creator_price",
-        "creator_currency",
-        "client_price",
-        "client_currency",
-        "margin_eur",
-    )
-    verbose_name_plural = "creators on this campaign"
 
 
 class CreatorDealInline(DealInline):
@@ -143,11 +131,11 @@ class CampaignAdmin(admin.ModelAdmin):
     empty_value_display = "—"
     save_on_top = True
     list_select_related = ("campaign_owner",)
-    inlines = (CampaignDealInline, ClientShareInline)
+    inlines = (ClientShareInline,)
     list_display = (
         "client_name",
         "status_badge",
-        "team_lead",
+        "campaign_owner",
         "deadline",
         "budget_display",
         "creators_needed",
@@ -155,20 +143,20 @@ class CampaignAdmin(admin.ModelAdmin):
         "updated_at",
     )
     list_display_links = ("client_name",)
-    list_filter = ("status", "priority", "team_lead", "campaign_owner")
+    list_filter = ("status", "campaign_owner")
     search_fields = (
         "client_name",
-        "team_lead",
-        "poc",
         "client_poc_name",
         "campaign_owner__username",
+        "poc__username",
+        "scouting_team__username",
         "created_by__username",
         "remarks_brief",
         "notes",
     )
     date_hierarchy = "deadline"
-    filter_horizontal = ("country_market",)
-    readonly_fields = ("id", "created_by", "created_at", "updated_at")
+    filter_horizontal = ("country_market", "poc", "scouting_team")
+    readonly_fields = ("id", "created_by", "created_at", "updated_at", "creators_on_campaign")
     fieldsets = (
         (
             "Brief",
@@ -179,6 +167,7 @@ class CampaignAdmin(admin.ModelAdmin):
                     "status",
                     "campaign_owner",
                     "creators_needed",
+                    "creators_on_campaign",
                     "remarks_brief",
                     "notes",
                 ),
@@ -189,9 +178,7 @@ class CampaignAdmin(admin.ModelAdmin):
             {
                 "fields": (
                     "client_poc_name",
-                    "team_lead",
                     "poc",
-                    "second_poc",
                     "scouting_team",
                 ),
             },
@@ -206,20 +193,6 @@ class CampaignAdmin(admin.ModelAdmin):
             "Budget",
             {
                 "fields": ("budget_amount", "budget_currency", "budget_eur"),
-            },
-        ),
-        (
-            "Intake",
-            {
-                "fields": (
-                    "priority",
-                    "list_submitted",
-                    "ready_for_dev",
-                    "age_range",
-                    "view_consistency",
-                    "working_sheet",
-                    "cf_list",
-                ),
             },
         ),
         (
@@ -266,6 +239,26 @@ class CampaignAdmin(admin.ModelAdmin):
     @admin.display(description="Creators", ordering="_deal_count")
     def deal_count(self, obj):
         return obj._deal_count
+
+    @admin.display(description="Creators on this campaign")
+    def creators_on_campaign(self, obj):
+        if obj is None or not obj.pk:
+            return "Save the campaign first. Creators are added on their own screen."
+        count = getattr(obj, "_deal_count", None)
+        if count is None:
+            count = obj.deals.count()
+        list_url = (
+            reverse("admin:campaigns_campaigncreator_changelist")
+            + f"?campaign__id__exact={obj.pk}"
+        )
+        add_url = reverse("admin:campaigns_campaigncreator_add") + f"?campaign={obj.pk}"
+        label = "1 creator" if count == 1 else f"{count} creators"
+        return format_html(
+            '<a href="{}">{}</a> · <a href="{}">Add a creator</a>',
+            list_url,
+            label,
+            add_url,
+        )
 
     @admin.display(description="Status", ordering="status")
     def status_badge(self, obj):
