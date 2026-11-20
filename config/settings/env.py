@@ -20,7 +20,5 @@ def env_list(name: str, default: str = "") -> list[str]:
 def require_env(name: str) -> str:
     value = os.environ.get(name, "").strip()
     if not value:
-        raise ImproperlyConfigured(
-            f"{name} is required when the production label is active."
-        )
+        raise ImproperlyConfigured(f"{name} is required.")
     return value

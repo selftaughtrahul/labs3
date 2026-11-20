@@ -1,8 +1,31 @@
 """Settings shared by every environment label."""
 
+import os
 from pathlib import Path
 
+from .env import require_env
+
 BASE_DIR = Path(__file__).resolve().parents[2]
+
+_postgres_options = {}
+_search_path = os.environ.get("POSTGRES_SEARCH_PATH", "").strip()
+if _search_path:
+    # PostgreSQL 15+ grants no CREATE on public unless the role owns the database.
+    _postgres_options["options"] = f"-c search_path={_search_path}"
+
+DATABASES = {
+    "default": {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": require_env("POSTGRES_DB"),
+        "USER": require_env("POSTGRES_USER"),
+        "PASSWORD": require_env("POSTGRES_PASSWORD"),
+        "HOST": os.environ.get("POSTGRES_HOST", "localhost"),
+        "PORT": os.environ.get("POSTGRES_PORT", "5432"),
+        "CONN_MAX_AGE": int(os.environ.get("POSTGRES_CONN_MAX_AGE", "60")),
+        "CONN_HEALTH_CHECKS": True,
+        "OPTIONS": _postgres_options,
+    }
+}
 
 INSTALLED_APPS = [
     "jazzmin",

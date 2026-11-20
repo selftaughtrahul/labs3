@@ -7,5 +7,7 @@ __pycache__/
 .ruff_cache/
 .env
 staticfiles/
+# PostgreSQL is the only database. Ignore any leftover local SQLite files.
+*.sqlite3
 media/
 *.log

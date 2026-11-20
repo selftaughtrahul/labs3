@@ -14,12 +14,4 @@ SECRET_KEY = os.environ.get(
 )
 ALLOWED_HOSTS = env_list("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1")
 
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",  # noqa: F405
-        "OPTIONS": {"timeout": 60},
-    }
-}
-
 EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
