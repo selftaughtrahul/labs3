@@ -37,3 +37,15 @@ class AdminPageTests(TestCase):
         for url in urls:
             response = self.client.get(url)
             self.assertEqual(response.status_code, 200, url)
+
+    def test_deliverable_admin_pages_render(self):
+        urls = [
+            reverse("admin:creators_deliverabletype_changelist"),
+            reverse("admin:creators_deliverabletype_add"),
+            reverse("admin:creators_creatorrate_add"),
+            reverse("admin:campaigns_campaigncreator_change", args=[self.deal.id]),
+        ]
+        for url in urls:
+            response = self.client.get(url)
+            self.assertEqual(response.status_code, 200, url)
+            self.assertNotContains(response, "Server Error")

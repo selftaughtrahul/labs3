@@ -16,6 +16,7 @@ from campaigns.models import Campaign, CampaignStatus
 from creators.choices import Currency, Platform
 from creators.management.commands.import_central_sheet import username_from_name
 from creators.masters import lookup_named
+from creators.countries import resolved_country_names
 from creators.models import Country
 
 DEFAULT_XLSX = Path(
@@ -666,9 +667,10 @@ class Command(BaseCommand):
             return
         countries = []
         for name in names:
-            country = lookup_named(Country, name)
-            if country is not None and country not in countries:
-                countries.append(country)
+            for label in resolved_country_names(name):
+                country = lookup_named(Country, label)
+                if country is not None and country not in countries:
+                    countries.append(country)
         campaign.country_market.set(countries)
 
     def _person(self, name: str):

@@ -93,5 +93,5 @@ class ProspectingImportTests(TestCase):
         rate = CreatorRate.objects.get()
         self.assertEqual(
             set(rate.deliverables.values_list("name", flat=True)),
-            {"IG Reel", "IG Story"},
+            {"Instagram Reel", "Instagram Story"},
         )

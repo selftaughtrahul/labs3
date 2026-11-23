@@ -32,7 +32,7 @@ class SnapshotTests(TestCase):
         campaign = Campaign.objects.create(client_name="Snapshot", campaign_owner=owner)
         self.deal = CampaignCreator.objects.create(campaign=campaign, creator=creator)
         self.creator = creator
-        self.kind, _created = DeliverableType.objects.get_or_create(name="Reel")
+        self.kind, _created = DeliverableType.objects.get_or_create(name="Instagram Reel")
 
     def test_new_eur_confirmation_copies_the_offer(self):
         Outreach.objects.create(

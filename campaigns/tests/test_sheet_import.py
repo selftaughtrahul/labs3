@@ -90,7 +90,7 @@ class TrackerImportTests(TestCase):
         self.assertEqual(deal.creator_price, Decimal("212.00"))
         self.assertEqual(deal.client_price, Decimal("677.83"))
         rate = CreatorRate.objects.get()
-        self.assertEqual(set(rate.deliverables.values_list("name", flat=True)), {"Reel"})
+        self.assertEqual(set(rate.deliverables.values_list("name", flat=True)), {"Instagram Reel"})
         self.assertEqual(Campaign.objects.get().status, CampaignStatus.NOT_STARTED)
 
     def test_second_import_keeps_existing_rate_and_deal_price(self):
@@ -185,7 +185,7 @@ class CentralImportTests(TestCase):
         rate = CreatorRate.objects.get()
         self.assertEqual(
             set(rate.deliverables.values_list("name", flat=True)),
-            {"IG Reel", "IG Story"},
+            {"Instagram Reel", "Instagram Story"},
         )
-        self.assertTrue(DeliverableType.objects.filter(name="IG Reel").exists())
-        self.assertTrue(DeliverableType.objects.filter(name="IG Story").exists())
+        self.assertTrue(DeliverableType.objects.filter(name="Instagram Reel").exists())
+        self.assertTrue(DeliverableType.objects.filter(name="Instagram Story").exists())
