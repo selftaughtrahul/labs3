@@ -32,6 +32,8 @@ class DealStageMapTests(TestCase):
         self.assertEqual(map_deal_stage("Confirmed")[0], Stage.CONFIRMED)
         self.assertEqual(map_deal_stage("Campaign Declined")[0], Stage.CANCELLED)
         self.assertEqual(map_deal_stage("", "unresponsive")[0], Stage.UNRESPONSIVE)
+        self.assertEqual(map_deal_stage("Content pending")[0], Stage.IN_PROGRESS)
+        self.assertEqual(map_deal_stage("Influencer unresponsive")[0], Stage.UNRESPONSIVE)
         stage, _outreach, known = map_deal_stage("mystery status")
         self.assertFalse(known)
         self.assertEqual(stage, Stage.SHORTLISTED)

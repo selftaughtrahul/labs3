@@ -35,6 +35,12 @@ DEAL_STAGE_ALIASES = {
     "approved": Stage.APPROVED,
     "completed": Stage.COMPLETED,
     "cancelled": Stage.CANCELLED,
+    "content pending": Stage.IN_PROGRESS,
+    "waiting for product": Stage.IN_PROGRESS,
+    "waiting for draft": Stage.IN_PROGRESS,
+    "draft submitted": Stage.IN_PROGRESS,
+    "script submitted": Stage.IN_PROGRESS,
+    "partially published": Stage.IN_PROGRESS,
     "canceled": Stage.CANCELLED,
     "campaign declined": Stage.CANCELLED,
 }
