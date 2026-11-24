@@ -46,7 +46,7 @@ class Campaign(models.Model):
     min_engagement_rate = models.DecimalField(max_digits=5,decimal_places=2,null=True,blank=True,validators=[MinValueValidator(0), MaxValueValidator(100)],help_text="Percent, for example 2.50.",verbose_name="minimum engagement %")
     
     # team lead and created by are the same user
-    campaign_owner = models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.PROTECT,related_name="owned_campaigns",verbose_name="team lead")
+    campaign_owner = models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.PROTECT,related_name="owned_campaigns",verbose_name="team lead",null=True,blank=True)
     poc = models.ManyToManyField(settings.AUTH_USER_MODEL,blank=True,related_name="poc_campaigns",verbose_name="POC")
     scouting_team = models.ManyToManyField(settings.AUTH_USER_MODEL,blank=True,related_name="scouting_team_campaigns",verbose_name="scouting team")
     deadline = models.DateField(null=True, blank=True, verbose_name="campaign deadline")
