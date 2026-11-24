@@ -6,11 +6,13 @@ is kept. Gender, geo, and audience insights are stored only when the page
 states them, or when recent posts on the page include likes and views.
 """
 
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from django.core.management.base import BaseCommand, CommandError
 from django.db import close_old_connections
 from django.db.models import Q
+from django.db.utils import OperationalError
 
 from creators.choices import Platform
 from creators.masters import ISO_639_1_LANGUAGES, MasterCache, fold_key
@@ -42,6 +44,20 @@ _NULL_FIELDS = {
 }
 _TEXT_FIELDS = {"email", "other_contact", "geo", "audience_insights"}
 _KNOWN_LANGUAGES = {fold_key(name) for name in ISO_639_1_LANGUAGES}
+
+
+def _call_db(action):
+    """Retry a database call when the server briefly cannot be reached."""
+    delay = 5
+    for attempt in range(6):
+        try:
+            return action()
+        except OperationalError:
+            close_old_connections()
+            if attempt == 5:
+                raise
+            time.sleep(delay)
+            delay = min(delay * 2, 60)
 
 
 def save_blank_fields(creator_id, updates: dict[str, object]) -> list[str]:
@@ -281,10 +297,12 @@ class Command(BaseCommand):
                     unmatched += 1
                     self.stdout.write(f"BLANK {name} {page_url}")
                     continue
-                updates = _resolve(
-                    blank_field_updates(stored_by_id[creator_id], facts),
-                    countries,
-                    languages,
+                updates = _call_db(
+                    lambda: _resolve(
+                        blank_field_updates(stored_by_id[creator_id], facts),
+                        countries,
+                        languages,
+                    )
                 )
                 if not updates:
                     unchanged += 1
@@ -295,7 +313,7 @@ class Command(BaseCommand):
                 if dry_run:
                     updated += 1
                     continue
-                saved = save_blank_fields(creator_id, updates)
+                saved = _call_db(lambda: save_blank_fields(creator_id, updates))
                 if saved:
                     updated += 1
                 else:

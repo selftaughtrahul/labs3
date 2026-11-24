@@ -201,6 +201,8 @@ OFFICIAL_COUNTRIES = (
 EXTRA_CANONICAL_COUNTRIES = (
     "British Virgin Islands",
     "Hong Kong",
+    "Puerto Rico",
+    "Réunion",
     "Taiwan",
 )
 
