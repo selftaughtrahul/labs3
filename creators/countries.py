@@ -283,13 +283,44 @@ JUNK_LABEL_REPLACEMENTS = {
     "dubai": ("United Arab Emirates",),
     "english-speaking": (),
     "europe": (),
+    "excluding brazil": (),
     "german speaking countries": ("Germany", "Austria", "Switzerland"),
+    "global audiences": (),
+    "language programs before starting university in ma": (),
+    "language-focused gap programs (intercâmbio) for hi": (),
+    "latam": (),
+    "latin america": (),
+    "latin america priority - mexico": ("Mexico",),
+    "leadership": (),
+    "mena": (),
+    "national service (ns) transitions. brazil | school": ("Brazil",),
+    "none": (),
+    "nordics": ("Denmark", "Finland", "Iceland", "Norway", "Sweden"),
+    "north america": (),
+    "north america. singapore | school year end: nov 20": ("Singapore",),
+    "other latam countries": (),
+    "particularly to the uk": ("United Kingdom",),
+    "portugal, usa": ("Portugal",),
+    "pre-university skill programs before university ma": (),
+    "rest of latam": (),
+    "romania. english-speaking countries": ("Romania",),
+    "spanish-speaking latam": (),
+    "strong currency make international programs access": (),
+    "the priority is europe": (),
+    "travel programs. south africa | school year end: n": ("South Africa",),
+    "us hispanic": ("United States",),
+    "us only": ("United States",),
+    "volunteer": (),
+    "with strong demand for structured work": (),
+    "worldwide (excluding the cis market)": (),
 }
 
-# Creators stored as Europe, mapped by profile name.
-EUROPE_CREATOR_COUNTRIES = {
+# Creators stored under a region, mapped by profile name.
+CREATOR_COUNTRY_OVERRIDES = {
     "conor kenny": "Ireland",
     "diego": "Italy",
+    "direto ao ponto!": "Brazil",
+    "gabrieltrevizann": "Brazil",
 }
 
 

@@ -6,7 +6,7 @@ from django.db import transaction
 from campaigns.models import Campaign
 from creators.countries import (
     CANONICAL_SET,
-    EUROPE_CREATOR_COUNTRIES,
+    CREATOR_COUNTRY_OVERRIDES,
     JUNK_LABEL_REPLACEMENTS,
     OFFICIAL_COUNTRIES,
     canonical_country_name,
@@ -182,7 +182,7 @@ class Command(BaseCommand):
         return moved, deleted
 
     def _creator_replacement(self, creator, replacements):
-        override = EUROPE_CREATOR_COUNTRIES.get(
+        override = CREATOR_COUNTRY_OVERRIDES.get(
             " ".join((creator.influencer_name or "").split()).casefold()
         )
         if override:

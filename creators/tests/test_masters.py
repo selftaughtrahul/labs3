@@ -146,6 +146,39 @@ class CountryNormalizeTests(TestCase):
         )
         self.assertFalse(Country.objects.filter(name="German speaking countries").exists())
 
+    def test_region_labels_become_named_countries(self):
+        owner = User.objects.create_user(username="region-owner")
+        campaign = Campaign.objects.create(client_name="Region Brief", campaign_owner=owner)
+        campaign.country_market.add(
+            Country.objects.create(name="US only"),
+            Country.objects.create(name="Nordics"),
+        )
+        latam = Country.objects.create(name="Latam")
+        brazil_creator = Creator.objects.create(
+            platform=Platform.YOUTUBE,
+            profile_link="https://youtube.com/direto",
+            influencer_name="Direto ao ponto!",
+            country=latam,
+        )
+        blank_creator = Creator.objects.create(
+            platform=Platform.INSTAGRAM,
+            profile_link="https://instagram.com/francis",
+            influencer_name="Francis",
+            country=latam,
+        )
+
+        call_command("normalize_countries", stdout=StringIO())
+
+        brazil_creator.refresh_from_db()
+        blank_creator.refresh_from_db()
+        self.assertEqual(brazil_creator.country.name, "Brazil")
+        self.assertIsNone(blank_creator.country_id)
+        self.assertEqual(
+            list(campaign.country_market.order_by("name").values_list("name", flat=True)),
+            ["Denmark", "Finland", "Iceland", "Norway", "Sweden", "United States"],
+        )
+        self.assertFalse(Country.objects.filter(name__in=["US only", "Nordics", "Latam"]).exists())
+
     def test_note_label_is_dropped(self):
         owner = User.objects.create_user(username="tetr-owner")
         australia = lookup_named(Country, "Australia")
