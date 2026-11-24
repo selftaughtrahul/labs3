@@ -7,6 +7,16 @@ from creators.models import Country, Creator, CreatorRate, DeliverableType, Lang
 from .forms import CreatorAdminForm, CreatorRateForm, CreatorRateFormSet
 
 
+def display_case(value):
+    """Title-case a label for the admin list. Stored text is left unchanged.
+
+    A trailing or word-separating underscore is dropped, so ``puneet_`` reads
+    as ``Puneet`` and ``skin_care`` reads as ``Skin Care``.
+    """
+    words = [word.title() for word in str(value or "").replace("_", " ").split() if word]
+    return " ".join(words)
+
+
 class CreatorRateInline(admin.StackedInline):
     model = CreatorRate
     form = CreatorRateForm
@@ -50,11 +60,12 @@ class CreatorAdmin(admin.ModelAdmin):
     empty_value_display = "—"
     list_select_related = ("added_by", "country", "language")
     list_display = (
-        "influencer_name",
+        "name_label",
         "platform",
         "tier",
         "country",
         "niche_list",
+        "geo_label",
         "language",
         "followers_display",
         "email",
@@ -62,7 +73,7 @@ class CreatorAdmin(admin.ModelAdmin):
         "is_profile_checked",
         "added_by",
     )
-    list_display_links = ("influencer_name",)
+    list_display_links = ("name_label",)
     list_filter = ("platform", "tier", "source", "is_profile_checked", "country")
     search_fields = (
         "influencer_name",
@@ -122,6 +133,10 @@ class CreatorAdmin(admin.ModelAdmin):
         initial.setdefault("added_by", request.user.pk)
         return initial
 
+    @admin.display(description="Name", ordering="influencer_name")
+    def name_label(self, obj):
+        return display_case(obj.influencer_name) or "—"
+
     @admin.display(description="Followers", ordering="followers")
     def followers_display(self, obj):
         if obj.followers is None:
@@ -130,9 +145,13 @@ class CreatorAdmin(admin.ModelAdmin):
 
     @admin.display(description="Niche")
     def niche_list(self, obj):
-        if not obj.niche:
-            return "—"
-        return ", ".join(obj.niche)
+        labels = [display_case(item) for item in obj.niche or []]
+        labels = [item for item in labels if item]
+        return ", ".join(labels) if labels else "—"
+
+    @admin.display(description="Geo", ordering="geo")
+    def geo_label(self, obj):
+        return display_case(obj.geo) or "—"
 
     @admin.display(description="Profile")
     def profile(self, obj):
